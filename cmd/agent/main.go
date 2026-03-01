@@ -3,6 +3,7 @@ package main
 import (
     "flag"
     "fmt"
+    "os"
     "time"
     "github.com/GagarinRu/metrics/internal/agent"
 )
@@ -17,6 +18,10 @@ func main() {
     flag.IntVar(&reportInterval, "r", 10, "Report interval in seconds")
     flag.StringVar(&serverAddr, "a", "http://localhost:8080", "Server address")
     flag.Parse()
+    if flag.NArg() > 0 {
+        fmt.Printf("Unknown arguments: %v\n", flag.Args())
+        os.Exit(1)
+    }
     cfg := agent.Config{
         PollInterval:   time.Duration(pollInterval) * time.Second,
         ReportInterval: time.Duration(reportInterval) * time.Second,
@@ -27,6 +32,7 @@ func main() {
         cfg.PollInterval, cfg.ReportInterval)
     fmt.Printf("Sending metrics to %s\n", cfg.ServerAddr)
     if err := a.Run(); err != nil {
-        panic(err)
+        fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+        os.Exit(1)
     }
 }
