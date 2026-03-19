@@ -4,6 +4,7 @@ import (
     "flag"
     "fmt"
     "net/http"
+    "os"
     "github.com/go-chi/chi/v5"
     "github.com/GagarinRu/metrics/internal/handler"
     "github.com/GagarinRu/metrics/internal/storage"
@@ -13,6 +14,9 @@ func main() {
     var addr string
     flag.StringVar(&addr, "a", ":8080", "server address")
     flag.Parse()
+    if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
+        addr = envAddr
+    }
     store := storage.NewMemStorage()
     h := handler.NewHandler(store)
     r := chi.NewRouter()

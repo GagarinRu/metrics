@@ -1,12 +1,25 @@
 package main
 
 import (
-    "flag"
-    "fmt"
-    "os"
-    "time"
-    "github.com/GagarinRu/metrics/internal/agent"
+	"flag"
+	"fmt"
+	"os"
+	"strconv"
+	"time"
+	"github.com/GagarinRu/metrics/internal/agent"
 )
+
+func getEnvInt(envName string, defaultValue int) int {
+    if envVal := os.Getenv(envName); envVal != "" {
+        if val, err := strconv.Atoi(envVal); err == nil {
+            if val > 0 {
+                return val
+            }
+            fmt.Printf("%s must be positive, got %d\n", envName, val)
+        }
+    }
+    return defaultValue
+}
 
 func main() {
     var (
@@ -22,6 +35,12 @@ func main() {
         fmt.Printf("Unknown arguments: %v\n", flag.Args())
         os.Exit(1)
     }
+    if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
+        serverAddr = envAddr
+    }
+    pollInterval = getEnvInt("POLL_INTERVAL", pollInterval)
+    reportInterval = getEnvInt("REPORT_INTERVAL", reportInterval)
+
     cfg := agent.Config{
         PollInterval:   time.Duration(pollInterval) * time.Second,
         ReportInterval: time.Duration(reportInterval) * time.Second,
