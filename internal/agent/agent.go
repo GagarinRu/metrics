@@ -2,8 +2,10 @@ package agent
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 	"github.com/GagarinRu/metrics/internal/metrics"
@@ -16,6 +18,7 @@ type Agent struct {
 	reportInterval time.Duration
 	serverAddr     string
 	client         *http.Client
+	useGzip        bool
 }
 
 type Config struct {
@@ -31,6 +34,7 @@ func NewAgent(cfg Config) *Agent {
 		reportInterval: cfg.ReportInterval,
 		serverAddr:     cfg.ServerAddr,
 		client:         &http.Client{Timeout: 5 * time.Second},
+		useGzip:        true,
 	}
 }
 
@@ -97,19 +101,45 @@ func (a *Agent) sendMetric(metricType, name string, value interface{}) error {
 	if err != nil {
 		return err
 	}
+	bodyReader := bytes.NewReader(jsonData)
+	if a.useGzip {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		if _, err := zw.Write(jsonData); err != nil {
+			return err
+		}
+		if err := zw.Close(); err != nil {
+			return err
+		}
+		bodyReader = bytes.NewReader(buf.Bytes())
+	}
 	url := fmt.Sprintf("%s/update", a.serverAddr)
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(jsonData))
+	req, err := http.NewRequest(http.MethodPost, url, bodyReader)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Encoding", "gzip")
+	if a.useGzip {
+		req.Header.Set("Content-Encoding", "gzip")
+	}
 	resp, err := a.client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	var respBody io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		zr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+		defer zr.Close()
+		respBody = zr
+	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		b, _ := io.ReadAll(respBody)
+		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(b))
 	}
 	return nil
 }

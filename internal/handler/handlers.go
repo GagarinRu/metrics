@@ -98,6 +98,7 @@ func (h *Handler) GetMetric(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(strconv.FormatFloat(value, 'f', -1, 64)))
 	case MetricCounter:
@@ -106,6 +107,7 @@ func (h *Handler) GetMetric(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(strconv.FormatInt(value, 10)))
 	default:

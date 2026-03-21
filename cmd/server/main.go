@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"github.com/GagarinRu/metrics/internal/handler"
 	"github.com/GagarinRu/metrics/internal/logger"
 	"github.com/GagarinRu/metrics/internal/storage"
@@ -40,13 +41,38 @@ func main() {
 	r.Get("/", h.GetAllMetrics)
 	r.Get("/value/{metricType}/{metricName}", h.GetMetric)
 	r.Post("/update/{metricType}/{metricName}/{metricValue}", h.UpdateMetrics)
-	r.Post("/update", h.UpdateMetricsJSON)
-	r.Post("/value", h.GetMetricJSON)
+	r.Post("/update/", h.UpdateMetricsJSON)
+	r.Post("/value/", h.GetMetricJSON)
 
-	loggedRouter := logger.RequestLogger(r)
+	loggedRouter := logger.RequestLogger(gzipMiddleware(r))
 
 	fmt.Printf("Server started on %s\n", addr)
 	if err := http.ListenAndServe(addr, loggedRouter); err != nil {
 		logger.Log.Fatal("Server failed", zap.Error(err))
 	}
+}
+
+func gzipMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        ow := w
+        acceptEncoding := r.Header.Get("Accept-Encoding")
+        supportsGzip := strings.Contains(acceptEncoding, "gzip")
+        if supportsGzip {
+            cw := newCompressWriter(w)
+            ow = cw
+            defer cw.Close()
+        }
+        contentEncoding := r.Header.Get("Content-Encoding")
+        sendsGzip := strings.Contains(contentEncoding, "gzip")
+        if sendsGzip {
+            cr, err := newCompressReader(r.Body)
+            if err != nil {
+                w.WriteHeader(http.StatusInternalServerError)
+                return
+            }
+            r.Body = cr
+            defer cr.Close()
+        }
+        next.ServeHTTP(ow, r)
+    })
 }
