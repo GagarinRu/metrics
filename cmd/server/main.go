@@ -40,6 +40,8 @@ func main() {
 	r.Get("/", h.GetAllMetrics)
 	r.Get("/value/{metricType}/{metricName}", h.GetMetric)
 	r.Post("/update/{metricType}/{metricName}/{metricValue}", h.UpdateMetrics)
+	r.Post("/update", h.UpdateMetricsJSON)
+	r.Post("/value", h.GetMetricJSON)
 
 	loggedRouter := logger.RequestLogger(r)
 
