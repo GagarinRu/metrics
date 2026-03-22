@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 	"github.com/GagarinRu/metrics/internal/metrics"
 	"github.com/GagarinRu/metrics/internal/models"
@@ -25,6 +26,7 @@ type Config struct {
 	PollInterval   time.Duration
 	ReportInterval time.Duration
 	ServerAddr     string
+	UseGzip        bool
 }
 
 func NewAgent(cfg Config) *Agent {
@@ -34,7 +36,7 @@ func NewAgent(cfg Config) *Agent {
 		reportInterval: cfg.ReportInterval,
 		serverAddr:     cfg.ServerAddr,
 		client:         &http.Client{Timeout: 5 * time.Second},
-		useGzip:        true,
+		useGzip:        cfg.UseGzip,
 	}
 }
 
@@ -113,7 +115,11 @@ func (a *Agent) sendMetric(metricType, name string, value interface{}) error {
 		}
 		bodyReader = bytes.NewReader(buf.Bytes())
 	}
-	url := fmt.Sprintf("%s/update", a.serverAddr)
+	serverAddr := a.serverAddr
+	if !strings.Contains(serverAddr, "://") {
+		serverAddr = "http://" + serverAddr
+	}
+	url := fmt.Sprintf("%s/update", serverAddr)
 	req, err := http.NewRequest(http.MethodPost, url, bodyReader)
 	if err != nil {
 		return err

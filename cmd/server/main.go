@@ -1,54 +1,92 @@
 package main
 
 import (
+	"context"
 	"flag"
-	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 	"github.com/GagarinRu/metrics/internal/handler"
 	"github.com/GagarinRu/metrics/internal/logger"
 	"github.com/GagarinRu/metrics/internal/storage"
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/zap"
 )
 
 func main() {
 	var (
-		addr     string
-		logLevel string
+		addr            string
+		logLevel        string
+		storeInterval   int
+		fileStoragePath string
+		restore         bool
 	)
-	flag.StringVar(&addr, "a", ":8080", "server address")
-	flag.StringVar(&logLevel, "l", "info", "log level")
+	flag.StringVar(&addr, "a", ":8080", "Server address")
+	flag.StringVar(&logLevel, "l", "info", "Log level")
+	flag.IntVar(&storeInterval, "i", 300, "Interval storage in seconds")
+	flag.StringVar(&fileStoragePath, "f", "metrics.json", "Path to file for storage metrics")
+	flag.BoolVar(&restore, "r", false, "Restore metrics from a file at startup")
 	flag.Parse()
-
 	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
 		addr = envAddr
 	}
 	if envLogLevel := os.Getenv("LOG_LEVEL"); envLogLevel != "" {
 		logLevel = envLogLevel
 	}
+	if envInterval := os.Getenv("STORE_INTERVAL"); envInterval != "" {
+		if v, err := strconv.Atoi(envInterval); err == nil {
+			storeInterval = v
+		}
+	}
+	if envFile := os.Getenv("FILE_STORAGE_PATH"); envFile != "" {
+		fileStoragePath = envFile
+	}
+	if envRestore := os.Getenv("RESTORE"); envRestore != "" {
+		if v, err := strconv.ParseBool(envRestore); err == nil {
+			restore = v
+		}
+	}
+
 	if err := logger.Initialize(logLevel); err != nil {
 		logger.Log.Fatal("Failed to initialize logger", zap.Error(err))
 	}
 	defer logger.Log.Sync()
-
-	logger.Log.Info("Starting server", zap.String("address", addr))
-
-	store := storage.NewMemStorage()
+	logger.Log.Info("Starting server",
+		zap.String("address", addr),
+		zap.String("file_storage_path", fileStoragePath),
+		zap.Int("store_interval", storeInterval),
+		zap.Bool("restore", restore),
+	)
+	store := storage.NewMemStorageWithFile(fileStoragePath, storeInterval, restore)
+	defer store.Stop()
 	h := handler.NewHandler(store)
 	r := chi.NewRouter()
+	r.Use(middleware.StripSlashes)
 	r.Get("/", h.GetAllMetrics)
 	r.Get("/value/{metricType}/{metricName}", h.GetMetric)
 	r.Post("/update/{metricType}/{metricName}/{metricValue}", h.UpdateMetrics)
-	r.Post("/update/", h.UpdateMetricsJSON)
-	r.Post("/value/", h.GetMetricJSON)
-
+	r.Post("/update", h.UpdateMetricsJSON)
+	r.Post("/value", h.GetMetricJSON)
 	loggedRouter := logger.RequestLogger(gzipMiddleware(r))
-
-	fmt.Printf("Server started on %s\n", addr)
-	if err := http.ListenAndServe(addr, loggedRouter); err != nil {
-		logger.Log.Fatal("Server failed", zap.Error(err))
+	server := &http.Server{Addr: addr, Handler: loggedRouter}
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Log.Fatal("Server failed", zap.Error(err))
+		}
+	}()
+	logger.Log.Info("Server started", zap.String("address", addr))
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil {
+		logger.Log.Fatal("Server shutdown failed", zap.Error(err))
 	}
 }
 

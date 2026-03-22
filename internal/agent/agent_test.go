@@ -27,6 +27,7 @@ func TestAgent_SendMetric(t *testing.T) {
 	defer server.Close()
 	agent := NewAgent(Config{
 		ServerAddr: server.URL,
+		UseGzip:    false,
 	})
 	err := agent.sendMetric("gauge", "test", 42.5)
 	assert.NoError(t, err)
@@ -51,6 +52,7 @@ func TestAgent_SendMetricCounter(t *testing.T) {
 	defer server.Close()
 	agent := NewAgent(Config{
 		ServerAddr: server.URL,
+		UseGzip:    false,
 	})
 	err := agent.sendMetric("counter", "test_counter", int64(10))
 	assert.NoError(t, err)
@@ -69,6 +71,7 @@ func TestAgent_SendAllMetrics(t *testing.T) {
 	defer server.Close()
 	agent := NewAgent(Config{
 		ServerAddr: server.URL,
+		UseGzip:    false,
 	})
 	agent.metrics.UpdateRuntimeMetrics()
 	err := agent.sendAllMetrics()

@@ -40,7 +40,6 @@ func main() {
     }
     pollInterval = getEnvInt("POLL_INTERVAL", pollInterval)
     reportInterval = getEnvInt("REPORT_INTERVAL", reportInterval)
-
     cfg := agent.Config{
         PollInterval:   time.Duration(pollInterval) * time.Second,
         ReportInterval: time.Duration(reportInterval) * time.Second,
