@@ -3,14 +3,18 @@ package agent
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 	"github.com/GagarinRu/metrics/internal/metrics"
 	"github.com/GagarinRu/metrics/internal/models"
+	"github.com/GagarinRu/metrics/internal/logger"
+	"go.uber.org/zap"
 )
 
 type Agent struct {
@@ -20,6 +24,9 @@ type Agent struct {
 	serverAddr     string
 	client         *http.Client
 	useGzip        bool
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
 }
 
 type Config struct {
@@ -30,6 +37,7 @@ type Config struct {
 }
 
 func NewAgent(cfg Config) *Agent {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Agent{
 		metrics:        metrics.NewMetrics(),
 		pollInterval:   cfg.PollInterval,
@@ -37,31 +45,64 @@ func NewAgent(cfg Config) *Agent {
 		serverAddr:     cfg.ServerAddr,
 		client:         &http.Client{Timeout: 5 * time.Second},
 		useGzip:        cfg.UseGzip,
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 }
 
-func (a *Agent) Run() error {
-	done := make(chan error, 2)
+func (a *Agent) Run(ctx context.Context) error {
+	a.wg.Add(1)
 	go func() {
+		defer a.wg.Done()
 		ticker := time.NewTicker(a.pollInterval)
 		defer ticker.Stop()
 		a.metrics.UpdateRuntimeMetrics()
-		for range ticker.C {
-			a.metrics.UpdateRuntimeMetrics()
-		}
-	}()
-	go func() {
-		ticker := time.NewTicker(a.reportInterval)
-		defer ticker.Stop()
-
-		for range ticker.C {
-			if err := a.sendAllMetrics(); err != nil {
-				fmt.Printf("Error sending metrics: %v\n", err)
+		for {
+			select {
+			case <-ticker.C:
+				a.metrics.UpdateRuntimeMetrics()
+			case <-ctx.Done():
+				logger.Log.Info("Stopping metrics collection goroutine")
+				return
 			}
 		}
 	}()
-	<-done
-	return nil
+	a.wg.Add(1)
+	go func() {
+		defer a.wg.Done()
+		ticker := time.NewTicker(a.reportInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				a.sendAllMetrics()
+			case <-ctx.Done():
+				logger.Log.Info("Sending final metrics before shutdown")
+				a.sendAllMetrics()
+				return
+			}
+		}
+	}()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (a *Agent) Shutdown(ctx context.Context) error {
+	logger.Log.Info("Shutting down agent")
+	a.cancel()
+	done := make(chan struct{})
+	go func() {
+		a.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		logger.Log.Info("Agent stopped gracefully")
+		return nil
+	case <-ctx.Done():
+		logger.Log.Error("Agent shutdown timeout", zap.Error(ctx.Err()))
+		return ctx.Err()
+	}
 }
 
 func (a *Agent) sendAllMetrics() error {
@@ -88,19 +129,33 @@ func (a *Agent) sendMetric(metricType, name string, value interface{}) error {
 		if v, ok := value.(float64); ok {
 			reqBody.Value = &v
 		} else {
+			logger.Log.Error("Invalid gauge value type",
+				zap.String("name", name),
+				zap.Any("value", value))
 			return fmt.Errorf("invalid gauge value type: %T", value)
 		}
 	case "counter":
 		if v, ok := value.(int64); ok {
 			reqBody.Delta = &v
 		} else {
+			logger.Log.Error("Invalid counter value type",
+				zap.String("name", name),
+				zap.Any("value", value))
 			return fmt.Errorf("invalid counter value type: %T", value)
 		}
 	default:
-		return fmt.Errorf("unsupported metric type: %s", metricType)
+		logger.Log.Error("Unsupported metric type",
+			zap.String("type", metricType),
+			zap.String("name", name))
+			return fmt.Errorf("unsupported metric type: %s", metricType)
+
 	}
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
+		logger.Log.Error("Failed to marshal metric",
+			zap.String("type", metricType),
+			zap.String("name", name),
+			zap.Error(err))
 		return err
 	}
 	bodyReader := bytes.NewReader(jsonData)
@@ -108,9 +163,15 @@ func (a *Agent) sendMetric(metricType, name string, value interface{}) error {
 		var buf bytes.Buffer
 		zw := gzip.NewWriter(&buf)
 		if _, err := zw.Write(jsonData); err != nil {
+			logger.Log.Error("Failed to compress metric data",
+				zap.String("type", metricType),
+				zap.String("name", name),
+				zap.Error(err))
 			return err
 		}
 		if err := zw.Close(); err != nil {
+			logger.Log.Error("Failed to close gzip writer",
+				zap.Error(err))
 			return err
 		}
 		bodyReader = bytes.NewReader(buf.Bytes())
@@ -119,9 +180,12 @@ func (a *Agent) sendMetric(metricType, name string, value interface{}) error {
 	if !strings.Contains(serverAddr, "://") {
 		serverAddr = "http://" + serverAddr
 	}
-	url := fmt.Sprintf("%s/update", serverAddr)
+	url := serverAddr + "/update"
 	req, err := http.NewRequest(http.MethodPost, url, bodyReader)
 	if err != nil {
+		logger.Log.Error("Failed to create HTTP request",
+			zap.String("url", url),
+			zap.Error(err))
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -131,6 +195,11 @@ func (a *Agent) sendMetric(metricType, name string, value interface{}) error {
 	}
 	resp, err := a.client.Do(req)
 	if err != nil {
+		logger.Log.Error("HTTP request failed",
+			zap.String("url", url),
+			zap.String("metric_type", metricType),
+			zap.String("metric_name", name),
+			zap.Error(err))
 		return err
 	}
 	defer resp.Body.Close()
@@ -138,6 +207,8 @@ func (a *Agent) sendMetric(metricType, name string, value interface{}) error {
 	if resp.Header.Get("Content-Encoding") == "gzip" {
 		zr, err := gzip.NewReader(resp.Body)
 		if err != nil {
+			logger.Log.Error("Failed to create gzip reader",
+				zap.Error(err))
 			return fmt.Errorf("failed to create gzip reader: %w", err)
 		}
 		defer zr.Close()
@@ -145,6 +216,11 @@ func (a *Agent) sendMetric(metricType, name string, value interface{}) error {
 	}
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(respBody)
+		logger.Log.Error("Server returned error",
+			zap.Int("status_code", resp.StatusCode),
+			zap.String("response_body", string(b)),
+			zap.String("metric_type", metricType),
+			zap.String("metric_name", name))
 		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(b))
 	}
 	return nil
