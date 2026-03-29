@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"github.com/GagarinRu/metrics/internal/logger"
 	"github.com/GagarinRu/metrics/internal/models"
 	"github.com/GagarinRu/metrics/internal/storage"
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 )
 
 type MetricType string
@@ -175,4 +177,14 @@ func (h *Handler) GetAllMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Fprintf(w, "</ul>")
 	fmt.Fprintf(w, "</body></html>")
+}
+
+func (h *Handler) PingDataBase(w http.ResponseWriter, r *http.Request) {
+	if err := h.storage.Ping(); err != nil {
+		logger.Log.Error("Database ping failed", zap.Error(err))
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }
