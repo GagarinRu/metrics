@@ -14,7 +14,7 @@ jobs:
     steps:
       - name: Check branch name
         run: |
-          if [[ ! $GITHUB_HEAD_REF =~ ^iter[0-9]+$ ]] && [[ ${{ github.ref }} != "refs/heads/main" ]]; then echo "Branch name must match pattern 'iter<number>' or github.ref must be 'refs/heads/main'" && echo "Your branch is $GITHUB_HEAD_REF and github.ref is ${{ github.ref }}" && exit 1; else echo "Your branch is $GITHUB_HEAD_REF and github.ref is ${{ github.ref }}"; fi
+          if [[ ! $GITHUB_HEAD_REF =~ ^feature/increment_[0-9]+$ ]] && [[ ${{ github.ref }} != "refs/heads/main" ]]; then echo "Branch name must match pattern 'feature/increment_<number>' or github.ref must be 'refs/heads/main'" && echo "Your branch is $GITHUB_HEAD_REF and github.ref is ${{ github.ref }}" && exit 1; else echo "Your branch is $GITHUB_HEAD_REF and github.ref is ${{ github.ref }}"; fi
 
   metricstest:
     runs-on: ubuntu-latest
@@ -65,20 +65,20 @@ jobs:
       - name: "Code increment #1"
         if: |
           github.ref == 'refs/heads/main' ||
-          github.head_ref == 'iter1' ||
-          github.head_ref == 'iter2' ||
-          github.head_ref == 'iter3' ||
-          github.head_ref == 'iter4' ||
-          github.head_ref == 'iter5' ||
-          github.head_ref == 'iter6' ||
-          github.head_ref == 'iter7' ||
-          github.head_ref == 'iter8' ||
-          github.head_ref == 'iter9' ||
-          github.head_ref == 'iter10' ||
-          github.head_ref == 'iter11' ||
-          github.head_ref == 'iter12' ||
-          github.head_ref == 'iter13' ||
-          github.head_ref == 'iter14'
+          github.head_ref == 'feature/increment_1' ||
+          github.head_ref == 'feature/incremet_2' ||
+          github.head_ref == 'feature-incremet_3' ||
+          github.head_ref == 'feature/increment_4' ||
+          github.head_ref == 'feature/increment_5' ||
+          github.head_ref == 'feature/increment_6' ||
+          github.head_ref == 'feature/increment_7' ||
+          github.head_ref == 'feature/increment_8' ||
+          github.head_ref == 'feature/increment_9' ||
+          github.head_ref == 'feature/increment_10' ||
+          github.head_ref == 'feature/increment_11' ||
+          github.head_ref == 'feature/increment_12' ||
+          github.head_ref == 'feature/increment_13' ||
+          github.head_ref == 'feature/increment_14'
         run: |
           metricstest -test.v -test.run=^TestIteration1$ \
             -binary-path=cmd/server/server
@@ -91,14 +91,14 @@ jobs:
       - name: "Code increment #2"
         if: |
           github.ref == 'refs/heads/main' ||
-          github.head_ref == 'iter2' ||
-          github.head_ref == 'iter3' ||
-          github.head_ref == 'iter4' ||
-          github.head_ref == 'iter5' ||
-          github.head_ref == 'iter6' ||
-          github.head_ref == 'iter7' ||
-          github.head_ref == 'iter8' ||
-          github.head_ref == 'iter9' ||
+          github.head_ref == 'feature/incremet_2' ||
+          github.head_ref == 'feature-incremet_3' ||
+          github.head_ref == 'feature/increment_4' ||
+          github.head_ref == 'feature/increment_5' ||
+          github.head_ref == 'feature/increment_6' ||
+          github.head_ref == 'feature/increment_7' ||
+          github.head_ref == 'feature/increment_8' ||
+          github.head_ref == 'feature/increment_9' ||
           github.head_ref == 'iter10' ||
           github.head_ref == 'iter11' ||
           github.head_ref == 'iter12' ||
@@ -112,13 +112,13 @@ jobs:
       - name: "Code increment #3"
         if: |
           github.ref == 'refs/heads/main' ||
-          github.head_ref == 'iter3' ||
-          github.head_ref == 'iter4' ||
-          github.head_ref == 'iter5' ||
-          github.head_ref == 'iter6' ||
-          github.head_ref == 'iter7' ||
-          github.head_ref == 'iter8' ||
-          github.head_ref == 'iter9' ||
+          github.head_ref == 'feature-incremet_3' ||
+          github.head_ref == 'feature/increment_4' ||
+          github.head_ref == 'feature/increment_5' ||
+          github.head_ref == 'feature/increment_6' ||
+          github.head_ref == 'feature/increment_7' ||
+          github.head_ref == 'feature/increment_8' ||
+          github.head_ref == 'feature/increment_9' ||
           github.head_ref == 'iter10' ||
           github.head_ref == 'iter11' ||
           github.head_ref == 'iter12' ||
@@ -133,12 +133,12 @@ jobs:
       - name: "Code increment #4"
         if: |
           github.ref == 'refs/heads/main' ||
-          github.head_ref == 'iter4' ||
-          github.head_ref == 'iter5' ||
-          github.head_ref == 'iter6' ||
-          github.head_ref == 'iter7' ||
-          github.head_ref == 'iter8' ||
-          github.head_ref == 'iter9' ||
+          github.head_ref == 'feature/increment_4' ||
+          github.head_ref == 'feature/increment_5' ||
+          github.head_ref == 'feature/increment_6' ||
+          github.head_ref == 'feature/increment_7' ||
+          github.head_ref == 'feature/increment_8' ||
+          github.head_ref == 'feature/increment_9' ||
           github.head_ref == 'iter10' ||
           github.head_ref == 'iter11' ||
           github.head_ref == 'iter12' ||
@@ -157,11 +157,11 @@ jobs:
       - name: "Code increment #5"
         if: |
           github.ref == 'refs/heads/main' ||
-          github.head_ref == 'iter5' ||
-          github.head_ref == 'iter6' ||
-          github.head_ref == 'iter7' ||
-          github.head_ref == 'iter8' ||
-          github.head_ref == 'iter9' ||
+          github.head_ref == 'feature/increment_5' ||
+          github.head_ref == 'feature/increment_6' ||
+          github.head_ref == 'feature/increment_7' ||
+          github.head_ref == 'feature/increment_8' ||
+          github.head_ref == 'feature/increment_9' ||
           github.head_ref == 'iter10' ||
           github.head_ref == 'iter11' ||
           github.head_ref == 'iter12' ||
@@ -180,10 +180,10 @@ jobs:
       - name: "Code increment #6"
         if: |
           github.ref == 'refs/heads/main' ||
-          github.head_ref == 'iter6' ||
-          github.head_ref == 'iter7' ||
-          github.head_ref == 'iter8' ||
-          github.head_ref == 'iter9' ||
+          github.head_ref == 'feature/increment_6' ||
+          github.head_ref == 'feature/increment_7' ||
+          github.head_ref == 'feature/increment_8' ||
+          github.head_ref == 'feature/increment_9' ||
           github.head_ref == 'iter10' ||
           github.head_ref == 'iter11' ||
           github.head_ref == 'iter12' ||
@@ -202,9 +202,9 @@ jobs:
       - name: "Code increment #7"
         if: |
           github.ref == 'refs/heads/main' ||
-          github.head_ref == 'iter7' ||
-          github.head_ref == 'iter8' ||
-          github.head_ref == 'iter9' ||
+          github.head_ref == 'feature/increment_7' ||
+          github.head_ref == 'feature/increment_8' ||
+          github.head_ref == 'feature/increment_9' ||
           github.head_ref == 'iter10' ||
           github.head_ref == 'iter11' ||
           github.head_ref == 'iter12' ||
@@ -223,8 +223,8 @@ jobs:
       - name: "Code increment #8"
         if: |
           github.ref == 'refs/heads/main' ||
-          github.head_ref == 'iter8' ||
-          github.head_ref == 'iter9' ||
+          github.head_ref == 'feature/increment_8' ||
+          github.head_ref == 'feature/increment_9' ||
           github.head_ref == 'iter10' ||
           github.head_ref == 'iter11' ||
           github.head_ref == 'iter12' ||
@@ -243,7 +243,7 @@ jobs:
       - name: "Code increment #9"
         if: |
           github.ref == 'refs/heads/main' ||
-          github.head_ref == 'iter9' ||
+          github.head_ref == 'feature/increment_9' ||
           github.head_ref == 'iter10' ||
           github.head_ref == 'iter11' ||
           github.head_ref == 'iter12' ||
