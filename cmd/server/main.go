@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"flag"
 	"net/http"
 	"os"
@@ -37,7 +36,7 @@ func main() {
 	flag.StringVar(&databaseDSN, "d", "", "Database DSN")
 	flag.Parse()
 	if envDsn := os.Getenv("DATABASE_DSN"); envDsn != "" {
-		databaseDSN = envDsn
+		databaseDSN = strings.Trim(envDsn, `"'`)
 	}
 	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
 		addr = envAddr
@@ -70,19 +69,12 @@ func main() {
 		zap.Bool("restore", restore),
 		zap.String("database_dsn", databaseDSN),
 	)
-	store := storage.NewMemStorageWithFile(fileStoragePath, storeInterval, restore)
-	if databaseDSN != "" {
-		db, err := sql.Open("postgres", databaseDSN)
-		if err != nil {
-			logger.Log.Warn("Failed to connect to database", zap.Error(err))
-		}
-		if err := db.Ping(); err != nil {
-			logger.Log.Warn("Failed to ping database", zap.Error(err))
-		}
-		logger.Log.Info("Connected to database successfully")
-		store.SetDB(db)
-	}
-	defer store.Stop()
+
+	store := storage.NewMemStorageWithFile(fileStoragePath, storeInterval, restore, databaseDSN)
+	defer func() {
+		store.Stop()
+		store.Close()
+	}()
 	h := handler.NewHandler(store)
 	r := chi.NewRouter()
 	r.Use(middleware.StripSlashes)
