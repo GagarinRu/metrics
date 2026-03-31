@@ -5,17 +5,66 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
 	"github.com/GagarinRu/metrics/internal/logger"
 	"github.com/GagarinRu/metrics/internal/metrics"
 	"github.com/GagarinRu/metrics/internal/models"
 	"go.uber.org/zap"
-	"io"
-	"net/http"
-	"strings"
-	"sync"
-	"time"
 )
+
+const (
+	maxRetries     = 3
+	retryInterval1 = 1 * time.Second
+	retryInterval2 = 3 * time.Second
+	retryInterval3 = 5 * time.Second
+)
+
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Temporary() || netErr.Timeout()
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return urlErr.Temporary() || urlErr.Timeout()
+	}
+	return false
+}
+
+func (a *Agent) sendWithRetry(req *http.Request) (*http.Response, error) {
+	intervals := []time.Duration{retryInterval1, retryInterval2, retryInterval3}
+
+	var lastErr error
+	for i := 0; i <= maxRetries; i++ {
+		resp, err := a.client.Do(req)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if !isRetryableError(err) {
+			return nil, err
+		}
+		if i < maxRetries {
+			logger.Log.Warn("Request failed, retrying",
+				zap.Error(err),
+				zap.Int("attempt", i+1),
+				zap.Duration("interval", intervals[i]))
+			time.Sleep(intervals[i])
+		}
+	}
+	return nil, lastErr
+}
 
 type Agent struct {
 	metrics        *metrics.Metrics
@@ -184,7 +233,7 @@ func (a *Agent) sendBatch(metrics []models.Metrics) error {
 	if a.useGzip {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
-	resp, err := a.client.Do(req)
+	resp, err := a.sendWithRetry(req)
 	if err != nil {
 		logger.Log.Error("HTTP request failed",
 			zap.String("url", url),
@@ -286,7 +335,7 @@ func (a *Agent) sendMetric(metricType, name string, value interface{}) error {
 	if a.useGzip {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
-	resp, err := a.client.Do(req)
+	resp, err := a.sendWithRetry(req)
 	if err != nil {
 		logger.Log.Error("HTTP request failed",
 			zap.String("url", url),

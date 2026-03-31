@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,8 +17,66 @@ import (
 	"github.com/golang-migrate/migrate/v4/database/postgres"
 	"go.uber.org/zap"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/lib/pq"
 )
+
+const (
+	maxRetries     = 3
+	retryInterval1 = 1 * time.Second
+	retryInterval2 = 3 * time.Second
+	retryInterval3 = 5 * time.Second
+)
+
+func isRetriableDBError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case pgerrcode.ConnectionException,
+			pgerrcode.ConnectionDoesNotExist,
+			pgerrcode.ConnectionFailure,
+			pgerrcode.SQLClientUnableToEstablishSQLConnection,
+			pgerrcode.SQLServerRejectedEstablishmentOfSQLConnection,
+			pgerrcode.TransactionRollback,
+			pgerrcode.SerializationFailure,
+			pgerrcode.DeadlockDetected,
+			pgerrcode.CannotConnectNow:
+			return true
+		}
+		class := pgErr.SQLState()
+		if strings.HasPrefix(class, "08") {
+			return true
+		}
+	}
+	return false
+}
+
+func (ms *MemStorage) executeWithRetry(ctx context.Context, fn func() error) error {
+	intervals := []time.Duration{retryInterval1, retryInterval2, retryInterval3}
+	var lastErr error
+	for i := 0; i <= maxRetries; i++ {
+		err := fn()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !isRetriableDBError(err) {
+			return err
+		}
+		if i < maxRetries {
+			logger.Log.Warn("Database operation failed, retrying",
+				zap.Error(err),
+				zap.Int("attempt", i+1),
+				zap.Duration("interval", intervals[i]))
+			time.Sleep(intervals[i])
+		}
+	}
+	return lastErr
+}
 
 type Storage interface {
 	UpdateGauge(name string, value float64)
@@ -168,10 +227,13 @@ func (ms *MemStorage) UpdateGauge(name string, value float64) {
 func (ms *MemStorage) saveGaugeToDB(name string, value float64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := ms.db.ExecContext(ctx,
-		`INSERT INTO metrics (id, type, value, delta) VALUES ($1, 'gauge', $2, NULL)
-		 ON CONFLICT (id) DO UPDATE SET value = $2, type = 'gauge'`,
-		name, value)
+	err := ms.executeWithRetry(ctx, func() error {
+		_, err := ms.db.ExecContext(ctx,
+			`INSERT INTO metrics (id, type, value, delta) VALUES ($1, 'gauge', $2, NULL)
+			 ON CONFLICT (id) DO UPDATE SET value = $2, type = 'gauge'`,
+			name, value)
+		return err
+	})
 	if err != nil {
 		logger.Log.Error("Error saving gauge to DB", zap.Error(err))
 	}
@@ -180,10 +242,13 @@ func (ms *MemStorage) saveGaugeToDB(name string, value float64) {
 func (ms *MemStorage) saveCounterToDB(name string, delta int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := ms.db.ExecContext(ctx,
-		`INSERT INTO metrics (id, type, value, delta) VALUES ($1, 'counter', NULL, $2)
-		 ON CONFLICT (id) DO UPDATE SET delta = metrics.delta + $2, type = 'counter'`,
-		name, delta)
+	err := ms.executeWithRetry(ctx, func() error {
+		_, err := ms.db.ExecContext(ctx,
+			`INSERT INTO metrics (id, type, value, delta) VALUES ($1, 'counter', NULL, $2)
+			 ON CONFLICT (id) DO UPDATE SET delta = metrics.delta + $2, type = 'counter'`,
+			name, delta)
+		return err
+	})
 	if err != nil {
 		logger.Log.Error("Error saving counter to DB", zap.Error(err))
 	}
@@ -224,50 +289,52 @@ func (ms *MemStorage) UpdateBatch(metrics []models.Metrics) error {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 	if ms.useDB && ms.db != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		tx, err := ms.db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-		for _, m := range metrics {
-			if m.MType == "gauge" && m.Value != nil {
-				_, err := tx.ExecContext(ctx,
-					`INSERT INTO metrics (id, type, value, delta) VALUES ($1, 'gauge', $2, NULL)
-					 ON CONFLICT (id) DO UPDATE SET value = $2, type = 'gauge'`,
-					m.ID, *m.Value)
-				if err != nil {
-					return err
-				}
-				ms.metrics[m.ID] = models.Metrics{
-					ID:    m.ID,
-					MType: "gauge",
-					Value: m.Value,
-				}
-			} else if m.MType == "counter" && m.Delta != nil {
-				_, err := tx.ExecContext(ctx,
-					`INSERT INTO metrics (id, type, value, delta) VALUES ($1, 'counter', NULL, $2)
-					 ON CONFLICT (id) DO UPDATE SET delta = metrics.delta + $2, type = 'counter'`,
-					m.ID, *m.Delta)
-				if err != nil {
-					return err
-				}
-				existing, ok := ms.metrics[m.ID]
-				if ok && existing.MType == "counter" && existing.Delta != nil {
-					*existing.Delta += *m.Delta
-					ms.metrics[m.ID] = existing
-				} else {
-					d := *m.Delta
+		return ms.executeWithRetry(ctx, func() error {
+			tx, err := ms.db.BeginTx(ctx, nil)
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback()
+			for _, m := range metrics {
+				if m.MType == "gauge" && m.Value != nil {
+					_, err := tx.ExecContext(ctx,
+						`INSERT INTO metrics (id, type, value, delta) VALUES ($1, 'gauge', $2, NULL)
+						 ON CONFLICT (id) DO UPDATE SET value = $2, type = 'gauge'`,
+						m.ID, *m.Value)
+					if err != nil {
+						return err
+					}
 					ms.metrics[m.ID] = models.Metrics{
 						ID:    m.ID,
-						MType: "counter",
-						Delta: &d,
+						MType: "gauge",
+						Value: m.Value,
+					}
+				} else if m.MType == "counter" && m.Delta != nil {
+					_, err := tx.ExecContext(ctx,
+						`INSERT INTO metrics (id, type, value, delta) VALUES ($1, 'counter', NULL, $2)
+						 ON CONFLICT (id) DO UPDATE SET delta = metrics.delta + $2, type = 'counter'`,
+						m.ID, *m.Delta)
+					if err != nil {
+						return err
+					}
+					existing, ok := ms.metrics[m.ID]
+					if ok && existing.MType == "counter" && existing.Delta != nil {
+						*existing.Delta += *m.Delta
+						ms.metrics[m.ID] = existing
+					} else {
+						d := *m.Delta
+						ms.metrics[m.ID] = models.Metrics{
+							ID:    m.ID,
+							MType: "counter",
+							Delta: &d,
+						}
 					}
 				}
 			}
-		}
-		return tx.Commit()
+			return tx.Commit()
+		})
 	}
 	for _, m := range metrics {
 		ms.metrics[m.ID] = m
