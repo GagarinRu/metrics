@@ -6,15 +6,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/GagarinRu/metrics/internal/logger"
+	"github.com/GagarinRu/metrics/internal/metrics"
+	"github.com/GagarinRu/metrics/internal/models"
+	"go.uber.org/zap"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
-	"github.com/GagarinRu/metrics/internal/metrics"
-	"github.com/GagarinRu/metrics/internal/models"
-	"github.com/GagarinRu/metrics/internal/logger"
-	"go.uber.org/zap"
 )
 
 type Agent struct {
@@ -24,6 +24,7 @@ type Agent struct {
 	serverAddr     string
 	client         *http.Client
 	useGzip        bool
+	useBatch       bool
 	ctx            context.Context
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
@@ -34,10 +35,15 @@ type Config struct {
 	ReportInterval time.Duration
 	ServerAddr     string
 	UseGzip        bool
+	UseBatch       *bool
 }
 
 func NewAgent(cfg Config) *Agent {
 	ctx, cancel := context.WithCancel(context.Background())
+	useBatch := true
+	if cfg.UseBatch != nil {
+		useBatch = *cfg.UseBatch
+	}
 	return &Agent{
 		metrics:        metrics.NewMetrics(),
 		pollInterval:   cfg.PollInterval,
@@ -45,6 +51,7 @@ func NewAgent(cfg Config) *Agent {
 		serverAddr:     cfg.ServerAddr,
 		client:         &http.Client{Timeout: 5 * time.Second},
 		useGzip:        cfg.UseGzip,
+		useBatch:       useBatch,
 		ctx:            ctx,
 		cancel:         cancel,
 	}
@@ -106,6 +113,29 @@ func (a *Agent) Shutdown(ctx context.Context) error {
 }
 
 func (a *Agent) sendAllMetrics() error {
+	if a.useBatch {
+		var metrics []models.Metrics
+		for name, value := range a.metrics.GetGauges() {
+			v := value
+			metrics = append(metrics, models.Metrics{
+				ID:    name,
+				MType: "gauge",
+				Value: &v,
+			})
+		}
+		for name, value := range a.metrics.GetCounters() {
+			d := value
+			metrics = append(metrics, models.Metrics{
+				ID:    name,
+				MType: "counter",
+				Delta: &d,
+			})
+		}
+		if len(metrics) == 0 {
+			return nil
+		}
+		return a.sendBatch(metrics)
+	}
 	for name, value := range a.metrics.GetGauges() {
 		if err := a.sendMetric("gauge", name, value); err != nil {
 			return fmt.Errorf("failed to send gauge metric %s: %w", name, err)
@@ -115,6 +145,69 @@ func (a *Agent) sendAllMetrics() error {
 		if err := a.sendMetric("counter", name, value); err != nil {
 			return fmt.Errorf("failed to send counter metric %s: %w", name, err)
 		}
+	}
+	return nil
+}
+
+func (a *Agent) sendBatch(metrics []models.Metrics) error {
+	jsonData, err := json.Marshal(metrics)
+	if err != nil {
+		logger.Log.Error("Failed to marshal batch", zap.Error(err))
+		return err
+	}
+	bodyReader := bytes.NewReader(jsonData)
+	if a.useGzip {
+		var buf bytes.Buffer
+		zw := gzip.NewWriter(&buf)
+		if _, err := zw.Write(jsonData); err != nil {
+			logger.Log.Error("Failed to compress batch", zap.Error(err))
+			return err
+		}
+		if err := zw.Close(); err != nil {
+			logger.Log.Error("Failed to close gzip writer", zap.Error(err))
+			return err
+		}
+		bodyReader = bytes.NewReader(buf.Bytes())
+	}
+	serverAddr := a.serverAddr
+	if !strings.Contains(serverAddr, "://") {
+		serverAddr = "http://" + serverAddr
+	}
+	url := serverAddr + "/updates"
+	req, err := http.NewRequest(http.MethodPost, url, bodyReader)
+	if err != nil {
+		logger.Log.Error("Failed to create HTTP request", zap.String("url", url), zap.Error(err))
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Encoding", "gzip")
+	if a.useGzip {
+		req.Header.Set("Content-Encoding", "gzip")
+	}
+	resp, err := a.client.Do(req)
+	if err != nil {
+		logger.Log.Error("HTTP request failed",
+			zap.String("url", url),
+			zap.Error(err))
+		return err
+	}
+	defer resp.Body.Close()
+	var respBody io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		zr, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			logger.Log.Error("Failed to create gzip reader", zap.Error(err))
+			return fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+		defer zr.Close()
+		respBody = zr
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(respBody)
+		logger.Log.Error("Server returned error",
+			zap.Int("status_code", resp.StatusCode),
+			zap.String("response_body", string(b)))
+		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(b))
 	}
 	return nil
 }
@@ -147,7 +240,7 @@ func (a *Agent) sendMetric(metricType, name string, value interface{}) error {
 		logger.Log.Error("Unsupported metric type",
 			zap.String("type", metricType),
 			zap.String("name", name))
-			return fmt.Errorf("unsupported metric type: %s", metricType)
+		return fmt.Errorf("unsupported metric type: %s", metricType)
 
 	}
 	jsonData, err := json.Marshal(reqBody)

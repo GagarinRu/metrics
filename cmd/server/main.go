@@ -82,6 +82,7 @@ func main() {
 	r.Get("/value/{metricType}/{metricName}", h.GetMetric)
 	r.Post("/update/{metricType}/{metricName}/{metricValue}", h.UpdateMetrics)
 	r.Post("/update", h.UpdateMetricsJSON)
+	r.Post("/updates", h.UpdateMetricsBatch)
 	r.Post("/value", h.GetMetricJSON)
 	r.Get("/ping", h.PingDataBase)
 	loggedRouter := logger.RequestLogger(gzipMiddleware(r))

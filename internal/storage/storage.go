@@ -22,6 +22,7 @@ import (
 type Storage interface {
 	UpdateGauge(name string, value float64)
 	UpdateCounter(name string, delta int64)
+	UpdateBatch(metrics []models.Metrics) error
 	GetGauge(name string) (float64, bool)
 	GetCounter(name string) (int64, bool)
 	GetAllGauges() map[string]float64
@@ -179,17 +180,10 @@ func (ms *MemStorage) saveGaugeToDB(name string, value float64) {
 func (ms *MemStorage) saveCounterToDB(name string, delta int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	var currentDelta int64
-	err := ms.db.QueryRowContext(ctx, "SELECT COALESCE(delta, 0) FROM metrics WHERE id = $1", name).Scan(&currentDelta)
-	if err != nil && err != sql.ErrNoRows {
-		logger.Log.Error("Error getting current counter", zap.Error(err))
-		return
-	}
-	newDelta := currentDelta + delta
-	_, err = ms.db.ExecContext(ctx,
+	_, err := ms.db.ExecContext(ctx,
 		`INSERT INTO metrics (id, type, value, delta) VALUES ($1, 'counter', NULL, $2)
-		 ON CONFLICT (id) DO UPDATE SET delta = $2, type = 'counter'`,
-		name, newDelta)
+		 ON CONFLICT (id) DO UPDATE SET delta = metrics.delta + $2, type = 'counter'`,
+		name, delta)
 	if err != nil {
 		logger.Log.Error("Error saving counter to DB", zap.Error(err))
 	}
@@ -221,6 +215,67 @@ func (ms *MemStorage) UpdateCounter(name string, delta int64) {
 			logger.Log.Error("error saving metrics", zap.Error(err))
 		}
 	}
+}
+
+func (ms *MemStorage) UpdateBatch(metrics []models.Metrics) error {
+	if len(metrics) == 0 {
+		return nil
+	}
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	if ms.useDB && ms.db != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		tx, err := ms.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		for _, m := range metrics {
+			if m.MType == "gauge" && m.Value != nil {
+				_, err := tx.ExecContext(ctx,
+					`INSERT INTO metrics (id, type, value, delta) VALUES ($1, 'gauge', $2, NULL)
+					 ON CONFLICT (id) DO UPDATE SET value = $2, type = 'gauge'`,
+					m.ID, *m.Value)
+				if err != nil {
+					return err
+				}
+				ms.metrics[m.ID] = models.Metrics{
+					ID:    m.ID,
+					MType: "gauge",
+					Value: m.Value,
+				}
+			} else if m.MType == "counter" && m.Delta != nil {
+				_, err := tx.ExecContext(ctx,
+					`INSERT INTO metrics (id, type, value, delta) VALUES ($1, 'counter', NULL, $2)
+					 ON CONFLICT (id) DO UPDATE SET delta = metrics.delta + $2, type = 'counter'`,
+					m.ID, *m.Delta)
+				if err != nil {
+					return err
+				}
+				existing, ok := ms.metrics[m.ID]
+				if ok && existing.MType == "counter" && existing.Delta != nil {
+					*existing.Delta += *m.Delta
+					ms.metrics[m.ID] = existing
+				} else {
+					d := *m.Delta
+					ms.metrics[m.ID] = models.Metrics{
+						ID:    m.ID,
+						MType: "counter",
+						Delta: &d,
+					}
+				}
+			}
+		}
+		return tx.Commit()
+	}
+	for _, m := range metrics {
+		ms.metrics[m.ID] = m
+	}
+	if ms.interval == 0 && ms.filePath != "" && !ms.memoryOnly {
+		return ms.Save()
+	}
+	return nil
 }
 
 func (ms *MemStorage) GetGauge(name string) (float64, bool) {

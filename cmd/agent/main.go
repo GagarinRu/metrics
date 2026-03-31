@@ -3,14 +3,14 @@ package main
 import (
 	"context"
 	"flag"
+	"github.com/GagarinRu/metrics/internal/agent"
+	"github.com/GagarinRu/metrics/internal/logger"
+	"go.uber.org/zap"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
-	"github.com/GagarinRu/metrics/internal/agent"
-	"github.com/GagarinRu/metrics/internal/logger"
-	"go.uber.org/zap"
 )
 
 func getEnvInt(envName string, defaultValue int) int {
@@ -31,7 +31,7 @@ func getEnvInt(envName string, defaultValue int) int {
 func main() {
 	var (
 		pollInterval   int
-		logLevel        string
+		logLevel       string
 		reportInterval int
 		serverAddr     string
 	)
@@ -41,13 +41,13 @@ func main() {
 	flag.StringVar(&logLevel, "l", "info", "Log level")
 	flag.Parse()
 	if envLogLevel := os.Getenv("LOG_LEVEL"); envLogLevel != "" {
-        logLevel = envLogLevel
+		logLevel = envLogLevel
 	}
-    if err := logger.Initialize(logLevel); err != nil {
-         panic("Failed to initialize logger: " + err.Error())
-     }
-    defer logger.Log.Sync()
-    if flag.NArg() > 0 {
+	if err := logger.Initialize(logLevel); err != nil {
+		panic("Failed to initialize logger: " + err.Error())
+	}
+	defer logger.Log.Sync()
+	if flag.NArg() > 0 {
 		logger.Log.Error("Unknown arguments", zap.Strings("args", flag.Args()))
 		os.Exit(1)
 	}
@@ -56,11 +56,13 @@ func main() {
 	}
 	pollInterval = getEnvInt("POLL_INTERVAL", pollInterval)
 	reportInterval = getEnvInt("REPORT_INTERVAL", reportInterval)
+	useBatch := true
 	cfg := agent.Config{
 		PollInterval:   time.Duration(pollInterval) * time.Second,
 		ReportInterval: time.Duration(reportInterval) * time.Second,
 		ServerAddr:     serverAddr,
 		UseGzip:        true,
+		UseBatch:       &useBatch,
 	}
 	a := agent.NewAgent(cfg)
 	logger.Log.Info("Starting agent",
