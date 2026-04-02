@@ -337,7 +337,22 @@ func (ms *MemStorage) UpdateBatch(metrics []models.Metrics) error {
 		})
 	}
 	for _, m := range metrics {
-		ms.metrics[m.ID] = m
+		if m.MType == "counter" && m.Delta != nil {
+			existing, ok := ms.metrics[m.ID]
+			if ok && existing.MType == "counter" && existing.Delta != nil {
+				*existing.Delta += *m.Delta
+				ms.metrics[m.ID] = existing
+			} else {
+				d := *m.Delta
+				ms.metrics[m.ID] = models.Metrics{
+					ID:    m.ID,
+					MType: "counter",
+					Delta: &d,
+				}
+			}
+		} else {
+			ms.metrics[m.ID] = m
+		}
 	}
 	if ms.interval == 0 && ms.filePath != "" && !ms.memoryOnly {
 		return ms.Save()
