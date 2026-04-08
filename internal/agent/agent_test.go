@@ -2,11 +2,11 @@ package agent
 
 import (
 	"encoding/json"
+	"github.com/GagarinRu/metrics/internal/models"
+	"github.com/stretchr/testify/assert"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"github.com/GagarinRu/metrics/internal/models"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestAgent_SendMetric(t *testing.T) {
@@ -58,9 +58,10 @@ func TestAgent_SendMetricCounter(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestAgent_SendAllMetrics(t *testing.T) {
+func TestAgent_SendAllMetricsJSON(t *testing.T) {
 	receivedMetrics := make(map[string]models.Metrics)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/update", r.URL.Path)
 		var req models.Metrics
 		err := json.NewDecoder(r.Body).Decode(&req)
 		assert.NoError(t, err)
@@ -69,9 +70,37 @@ func TestAgent_SendAllMetrics(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}))
 	defer server.Close()
+	useBatch := false
 	agent := NewAgent(Config{
 		ServerAddr: server.URL,
 		UseGzip:    false,
+		UseBatch:   &useBatch,
+	})
+	agent.metrics.UpdateRuntimeMetrics()
+	err := agent.sendAllMetrics()
+	assert.NoError(t, err)
+	assert.True(t, len(receivedMetrics) > 0)
+}
+
+func TestAgent_SendAllMetricsBatch(t *testing.T) {
+	receivedMetrics := make(map[string]models.Metrics)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/updates", r.URL.Path)
+		var req []models.Metrics
+		err := json.NewDecoder(r.Body).Decode(&req)
+		assert.NoError(t, err)
+		for _, m := range req {
+			receivedMetrics[m.ID] = m
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer server.Close()
+	useBatch := true
+	agent := NewAgent(Config{
+		ServerAddr: server.URL,
+		UseGzip:    false,
+		UseBatch:   &useBatch,
 	})
 	agent.metrics.UpdateRuntimeMetrics()
 	err := agent.sendAllMetrics()

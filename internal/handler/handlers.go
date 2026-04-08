@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"github.com/GagarinRu/metrics/internal/logger"
 	"github.com/GagarinRu/metrics/internal/models"
 	"github.com/GagarinRu/metrics/internal/storage"
 	"github.com/go-chi/chi/v5"
+	"go.uber.org/zap"
 )
 
 type MetricType string
@@ -175,4 +177,58 @@ func (h *Handler) GetAllMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Fprintf(w, "</ul>")
 	fmt.Fprintf(w, "</body></html>")
+}
+
+func (h *Handler) PingDataBase(w http.ResponseWriter, r *http.Request) {
+	if err := h.storage.Ping(); err != nil {
+		logger.Log.Error("Database ping failed", zap.Error(err))
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
+}
+
+func (h *Handler) UpdateMetricsBatch(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	var req []models.Metrics
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(&req); err != nil {
+		http.Error(w, `{"error": "invalid JSON"}`, http.StatusBadRequest)
+		return
+	}
+	if len(req) == 0 {
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		return
+	}
+	for _, m := range req {
+		if m.MType != string(MetricGauge) && m.MType != string(MetricCounter) {
+			http.Error(w, `{"error": "invalid metric type"}`, http.StatusBadRequest)
+			return
+		}
+		if m.ID == "" {
+			http.Error(w, `{"error": "metric id is required"}`, http.StatusBadRequest)
+			return
+		}
+		switch m.MType {
+		case string(MetricGauge):
+			if m.Value == nil {
+				http.Error(w, `{"error": "value is required for gauge"}`, http.StatusBadRequest)
+				return
+			}
+		case string(MetricCounter):
+			if m.Delta == nil {
+				http.Error(w, `{"error": "delta is required for counter"}`, http.StatusBadRequest)
+				return
+			}
+		}
+	}
+	if err := h.storage.UpdateBatch(req); err != nil {
+		logger.Log.Error("Failed to update batch", zap.Error(err))
+		http.Error(w, `{"error": "internal error"}`, http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
