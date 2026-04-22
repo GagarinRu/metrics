@@ -18,7 +18,7 @@ import (
 
 func TestGzipCompression(t *testing.T) {
 	store := storage.NewMemStorage()
-	h := handler.NewHandler(store)
+	h := handler.NewHandler(store, "")
 	r := chi.NewRouter()
 	r.Get("/", h.GetAllMetrics)
 	r.Get("/value/{metricType}/{metricName}", h.GetMetric)

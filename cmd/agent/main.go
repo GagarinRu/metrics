@@ -28,21 +28,32 @@ func getEnvInt(envName string, defaultValue int) int {
 	return defaultValue
 }
 
+func getEnvString(envName string, defaultValue string) string {
+	if envVal := os.Getenv(envName); envVal != "" {
+		return envVal
+	}
+	return defaultValue
+}
+
 func main() {
 	var (
 		pollInterval   int
 		logLevel       string
 		reportInterval int
 		serverAddr     string
+		key            string
 	)
 	flag.IntVar(&pollInterval, "p", 2, "Poll interval in seconds")
 	flag.IntVar(&reportInterval, "r", 10, "Report interval in seconds")
 	flag.StringVar(&serverAddr, "a", "http://localhost:8080", "Server address")
 	flag.StringVar(&logLevel, "l", "info", "Log level")
+	flag.StringVar(&key, "k", "", "Key for hash calculation")
 	flag.Parse()
-	if envLogLevel := os.Getenv("LOG_LEVEL"); envLogLevel != "" {
-		logLevel = envLogLevel
-	}
+	logLevel = getEnvString("LOG_LEVEL", logLevel)
+	serverAddr = getEnvString("ADDRESS", serverAddr)
+	pollInterval = getEnvInt("POLL_INTERVAL", pollInterval)
+	reportInterval = getEnvInt("REPORT_INTERVAL", reportInterval)
+	key = getEnvString("KEY", key)
 	if err := logger.Initialize(logLevel); err != nil {
 		panic("Failed to initialize logger: " + err.Error())
 	}
@@ -51,11 +62,6 @@ func main() {
 		logger.Log.Error("Unknown arguments", zap.Strings("args", flag.Args()))
 		os.Exit(1)
 	}
-	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
-		serverAddr = envAddr
-	}
-	pollInterval = getEnvInt("POLL_INTERVAL", pollInterval)
-	reportInterval = getEnvInt("REPORT_INTERVAL", reportInterval)
 	useBatch := true
 	cfg := agent.Config{
 		PollInterval:   time.Duration(pollInterval) * time.Second,
@@ -63,6 +69,7 @@ func main() {
 		ServerAddr:     serverAddr,
 		UseGzip:        true,
 		UseBatch:       &useBatch,
+		Key:            key,
 	}
 	a := agent.NewAgent(cfg)
 	logger.Log.Info("Starting agent",

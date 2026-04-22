@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,6 +75,7 @@ type Agent struct {
 	client         *http.Client
 	useGzip        bool
 	useBatch       bool
+	key            string
 	ctx            context.Context
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
@@ -85,6 +87,7 @@ type Config struct {
 	ServerAddr     string
 	UseGzip        bool
 	UseBatch       *bool
+	Key            string
 }
 
 func NewAgent(cfg Config) *Agent {
@@ -101,9 +104,15 @@ func NewAgent(cfg Config) *Agent {
 		client:         &http.Client{Timeout: 5 * time.Second},
 		useGzip:        cfg.UseGzip,
 		useBatch:       useBatch,
+		key:            cfg.Key,
 		ctx:            ctx,
 		cancel:         cancel,
 	}
+}
+
+func calculateHash(data []byte, key string) []byte {
+	hash := sha256.Sum256(append(data, []byte(key)...))
+	return hash[:]
 }
 
 func (a *Agent) Run(ctx context.Context) error {
@@ -233,6 +242,10 @@ func (a *Agent) sendBatch(metrics []models.Metrics) error {
 	if a.useGzip {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
+	if a.key != "" {
+		hash := calculateHash(jsonData, a.key)
+		req.Header.Set("HashSHA256", fmt.Sprintf("%x", hash))
+	}
 	resp, err := a.sendWithRetry(req)
 	if err != nil {
 		logger.Log.Error("HTTP request failed",
@@ -334,6 +347,10 @@ func (a *Agent) sendMetric(metricType, name string, value interface{}) error {
 	req.Header.Set("Accept-Encoding", "gzip")
 	if a.useGzip {
 		req.Header.Set("Content-Encoding", "gzip")
+	}
+	if a.key != "" {
+		hash := calculateHash(jsonData, a.key)
+		req.Header.Set("HashSHA256", fmt.Sprintf("%x", hash))
 	}
 	resp, err := a.sendWithRetry(req)
 	if err != nil {
