@@ -1,9 +1,12 @@
 package metrics
 
 import (
+	"fmt"
     "math/rand"
     "runtime"
     "sync"
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/mem"
 )
 
 type MetricType string
@@ -64,7 +67,27 @@ func (m *Metrics) UpdateRuntimeMetrics() {
     m.randomValue = rand.Float64()
     m.counters["PollCount"] = m.pollCount
     m.gauges["RandomValue"] = m.randomValue
-	
+}
+
+func (m *Metrics) UpdateSystemMetrics() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if memInfo, err := mem.VirtualMemory(); err == nil {
+		m.gauges["TotalMemory"] = float64(memInfo.Total)
+		m.gauges["FreeMemory"] = float64(memInfo.Free)
+	}
+	cpuCount := runtime.NumCPU()
+	perCPU := make([]float64, cpuCount)
+	if cpuPercents, err := cpu.Percent(0, true); err == nil {
+		for i, pct := range cpuPercents {
+			if i >= cpuCount {
+				break
+			}
+			perCPU[i] = pct
+			key := fmt.Sprintf("CPUutilization%d", i)
+			m.gauges[key] = pct
+		}
+	}
 }
 
 func (m *Metrics) GetGauges() map[string]float64 {

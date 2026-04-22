@@ -67,6 +67,12 @@ func (a *Agent) sendWithRetry(req *http.Request) (*http.Response, error) {
 	return nil, lastErr
 }
 
+type metricJob struct {
+	metricType string
+	name       string
+	value      interface{}
+}
+
 type Agent struct {
 	metrics        *metrics.Metrics
 	pollInterval   time.Duration
@@ -76,9 +82,11 @@ type Agent struct {
 	useGzip        bool
 	useBatch       bool
 	key            string
+	rateLimit      int
 	ctx            context.Context
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
+	jobs           chan metricJob
 }
 
 type Config struct {
@@ -88,6 +96,7 @@ type Config struct {
 	UseGzip        bool
 	UseBatch       *bool
 	Key            string
+	RateLimit      int
 }
 
 func NewAgent(cfg Config) *Agent {
@@ -95,6 +104,10 @@ func NewAgent(cfg Config) *Agent {
 	useBatch := true
 	if cfg.UseBatch != nil {
 		useBatch = *cfg.UseBatch
+	}
+	rateLimit := cfg.RateLimit
+	if rateLimit <= 0 {
+		rateLimit = 1
 	}
 	return &Agent{
 		metrics:        metrics.NewMetrics(),
@@ -105,8 +118,10 @@ func NewAgent(cfg Config) *Agent {
 		useGzip:        cfg.UseGzip,
 		useBatch:       useBatch,
 		key:            cfg.Key,
+		rateLimit:      rateLimit,
 		ctx:            ctx,
 		cancel:         cancel,
+		jobs:           make(chan metricJob, rateLimit*2),
 	}
 }
 
@@ -115,40 +130,71 @@ func calculateHash(data []byte, key string) []byte {
 	return hash[:]
 }
 
+func (a *Agent) collectMetrics() {
+	defer a.wg.Done()
+	ticker := time.NewTicker(a.pollInterval)
+	defer ticker.Stop()
+	a.metrics.UpdateRuntimeMetrics()
+	a.metrics.UpdateSystemMetrics()
+	for {
+		select {
+		case <-ticker.C:
+			a.metrics.UpdateRuntimeMetrics()
+			a.metrics.UpdateSystemMetrics()
+		case <-a.ctx.Done():
+			logger.Log.Info("Stopping metrics collection goroutine")
+			return
+		}
+	}
+}
+
+func (a *Agent) reportMetrics() {
+	defer a.wg.Done()
+	ticker := time.NewTicker(a.reportInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			a.sendMetricsToServer()
+		case <-a.ctx.Done():
+			logger.Log.Info("Sending final metrics before shutdown")
+			a.sendMetricsToServer()
+			return
+		}
+	}
+}
+
+func (a *Agent) workerPool() {
+	defer a.wg.Done()
+	for job := range a.jobs {
+		switch job.metricType {
+		case "gauge":
+			if v, ok := job.value.(float64); ok {
+				a.sendMetric(job.metricType, job.name, v)
+			}
+		case "counter":
+			if v, ok := job.value.(int64); ok {
+				a.sendMetric(job.metricType, job.name, v)
+			}
+		}
+	}
+}
+
 func (a *Agent) Run(ctx context.Context) error {
 	a.wg.Add(1)
-	go func() {
-		defer a.wg.Done()
-		ticker := time.NewTicker(a.pollInterval)
-		defer ticker.Stop()
-		a.metrics.UpdateRuntimeMetrics()
-		for {
-			select {
-			case <-ticker.C:
-				a.metrics.UpdateRuntimeMetrics()
-			case <-ctx.Done():
-				logger.Log.Info("Stopping metrics collection goroutine")
-				return
-			}
-		}
-	}()
+	go a.collectMetrics()
+
 	a.wg.Add(1)
-	go func() {
-		defer a.wg.Done()
-		ticker := time.NewTicker(a.reportInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				a.sendAllMetrics()
-			case <-ctx.Done():
-				logger.Log.Info("Sending final metrics before shutdown")
-				a.sendAllMetrics()
-				return
-			}
-		}
-	}()
+	go a.reportMetrics()
+
+	for i := 0; i < a.rateLimit; i++ {
+		a.wg.Add(1)
+		go a.workerPool()
+	}
+
 	<-ctx.Done()
+
+	close(a.jobs)
 	return ctx.Err()
 }
 
@@ -170,12 +216,16 @@ func (a *Agent) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (a *Agent) sendAllMetrics() error {
+func (a *Agent) Close() {
+	close(a.jobs)
+}
+
+func (a *Agent) sendMetricsToServer() {
 	if a.useBatch {
-		var metrics []models.Metrics
+		var allMetrics []models.Metrics
 		for name, value := range a.metrics.GetGauges() {
 			v := value
-			metrics = append(metrics, models.Metrics{
+			allMetrics = append(allMetrics, models.Metrics{
 				ID:    name,
 				MType: "gauge",
 				Value: &v,
@@ -183,28 +233,32 @@ func (a *Agent) sendAllMetrics() error {
 		}
 		for name, value := range a.metrics.GetCounters() {
 			d := value
-			metrics = append(metrics, models.Metrics{
+			allMetrics = append(allMetrics, models.Metrics{
 				ID:    name,
 				MType: "counter",
 				Delta: &d,
 			})
 		}
-		if len(metrics) == 0 {
-			return nil
+		if len(allMetrics) == 0 {
+			return
 		}
-		return a.sendBatch(metrics)
+		a.sendBatch(allMetrics)
+		return
 	}
 	for name, value := range a.metrics.GetGauges() {
-		if err := a.sendMetric("gauge", name, value); err != nil {
-			return fmt.Errorf("failed to send gauge metric %s: %w", name, err)
+		a.jobs <- metricJob{
+			metricType: "gauge",
+			name:       name,
+			value:      value,
 		}
 	}
 	for name, value := range a.metrics.GetCounters() {
-		if err := a.sendMetric("counter", name, value); err != nil {
-			return fmt.Errorf("failed to send counter metric %s: %w", name, err)
+		a.jobs <- metricJob{
+			metricType: "counter",
+			name:       name,
+			value:      value,
 		}
 	}
-	return nil
 }
 
 func (a *Agent) sendBatch(metrics []models.Metrics) error {

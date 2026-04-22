@@ -42,18 +42,21 @@ func main() {
 		reportInterval int
 		serverAddr     string
 		key            string
+		rateLimit      int
 	)
 	flag.IntVar(&pollInterval, "p", 2, "Poll interval in seconds")
 	flag.IntVar(&reportInterval, "r", 10, "Report interval in seconds")
 	flag.StringVar(&serverAddr, "a", "http://localhost:8080", "Server address")
 	flag.StringVar(&logLevel, "l", "info", "Log level")
 	flag.StringVar(&key, "k", "", "Key for hash calculation")
+	flag.IntVar(&rateLimit, "rate-limit", 1, "Rate limit (concurrent requests)")
 	flag.Parse()
 	logLevel = getEnvString("LOG_LEVEL", logLevel)
 	serverAddr = getEnvString("ADDRESS", serverAddr)
 	pollInterval = getEnvInt("POLL_INTERVAL", pollInterval)
 	reportInterval = getEnvInt("REPORT_INTERVAL", reportInterval)
 	key = getEnvString("KEY", key)
+	rateLimit = getEnvInt("RATE_LIMIT", rateLimit)
 	if err := logger.Initialize(logLevel); err != nil {
 		panic("Failed to initialize logger: " + err.Error())
 	}
@@ -70,11 +73,13 @@ func main() {
 		UseGzip:        true,
 		UseBatch:       &useBatch,
 		Key:            key,
+		RateLimit:      rateLimit,
 	}
 	a := agent.NewAgent(cfg)
 	logger.Log.Info("Starting agent",
 		zap.Int("poll_interval", pollInterval),
-		zap.Int("report_interval", reportInterval))
+		zap.Int("report_interval", reportInterval),
+		zap.Int("rate_limit", rateLimit))
 	logger.Log.Info("Sending metrics to", zap.String("server_addr", cfg.ServerAddr))
 	go func() {
 		if err := a.Run(context.Background()); err != nil && err != context.Canceled {
