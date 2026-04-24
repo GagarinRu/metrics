@@ -14,23 +14,29 @@ import (
 )
 
 func getEnvInt(envName string, defaultValue int) int {
-	if envVal := os.Getenv(envName); envVal != "" {
-		if val, err := strconv.Atoi(envVal); err == nil {
-			if val > 0 {
-				return val
-			}
-			logger.Log.Warn("Environment variable must be positive, using default",
+	if val, ok := os.LookupEnv(envName); ok {
+		v, err := strconv.Atoi(val)
+		if err != nil {
+			logger.Log.Error("Invalid environment variable value",
 				zap.String("env", envName),
-				zap.Int("value", val),
-				zap.Int("default", defaultValue))
+				zap.String("value", val),
+				zap.Error(err))
+			os.Exit(1)
 		}
+		if v <= 0 {
+			logger.Log.Error("Environment variable must be positive",
+				zap.String("env", envName),
+				zap.Int("value", v))
+			os.Exit(1)
+		}
+		return v
 	}
 	return defaultValue
 }
 
 func getEnvString(envName string, defaultValue string) string {
-	if envVal := os.Getenv(envName); envVal != "" {
-		return envVal
+	if val, ok := os.LookupEnv(envName); ok {
+		return val
 	}
 	return defaultValue
 }

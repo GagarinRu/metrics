@@ -220,45 +220,33 @@ func (a *Agent) Close() {
 	close(a.jobs)
 }
 
-func (a *Agent) sendMetricsToServer() {
-	if a.useBatch {
-		var allMetrics []models.Metrics
-		for name, value := range a.metrics.GetGauges() {
-			v := value
-			allMetrics = append(allMetrics, models.Metrics{
-				ID:    name,
-				MType: "gauge",
-				Value: &v,
-			})
-		}
-		for name, value := range a.metrics.GetCounters() {
-			d := value
-			allMetrics = append(allMetrics, models.Metrics{
-				ID:    name,
-				MType: "counter",
-				Delta: &d,
-			})
-		}
-		if len(allMetrics) == 0 {
-			return
-		}
-		a.sendBatch(allMetrics)
-		return
-	}
+func (a *Agent) collectAllMetrics() []models.Metrics {
+	var allMetrics []models.Metrics
 	for name, value := range a.metrics.GetGauges() {
-		a.jobs <- metricJob{
-			metricType: "gauge",
-			name:       name,
-			value:      value,
-		}
+		v := value
+		allMetrics = append(allMetrics, models.Metrics{
+			ID:    name,
+			MType: "gauge",
+			Value: &v,
+		})
 	}
 	for name, value := range a.metrics.GetCounters() {
-		a.jobs <- metricJob{
-			metricType: "counter",
-			name:       name,
-			value:      value,
-		}
+		d := value
+		allMetrics = append(allMetrics, models.Metrics{
+			ID:    name,
+			MType: "counter",
+			Delta: &d,
+		})
 	}
+	return allMetrics
+}
+
+func (a *Agent) sendMetricsToServer() {
+	allMetrics := a.collectAllMetrics()
+	if len(allMetrics) == 0 {
+		return
+	}
+	a.sendBatch(allMetrics)
 }
 
 func (a *Agent) sendBatch(metrics []models.Metrics) error {

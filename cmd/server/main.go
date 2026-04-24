@@ -90,6 +90,7 @@ func main() {
 	h := handler.NewHandler(store, key)
 	r := chi.NewRouter()
 	r.Use(middleware.StripSlashes)
+	r.Use(h.HashMiddleware)
 	r.Get("/", h.GetAllMetrics)
 	r.Get("/value/{metricType}/{metricName}", h.GetMetric)
 	r.Post("/update/{metricType}/{metricName}/{metricValue}", h.UpdateMetrics)

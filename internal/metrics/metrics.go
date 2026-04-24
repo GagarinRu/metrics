@@ -70,23 +70,28 @@ func (m *Metrics) UpdateRuntimeMetrics() {
 }
 
 func (m *Metrics) UpdateSystemMetrics() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	var systemGauges = make(map[string]float64)
+
 	if memInfo, err := mem.VirtualMemory(); err == nil {
-		m.gauges["TotalMemory"] = float64(memInfo.Total)
-		m.gauges["FreeMemory"] = float64(memInfo.Free)
+		systemGauges["TotalMemory"] = float64(memInfo.Total)
+		systemGauges["FreeMemory"] = float64(memInfo.Free)
 	}
-	cpuCount := runtime.NumCPU()
-	perCPU := make([]float64, cpuCount)
+
 	if cpuPercents, err := cpu.Percent(0, true); err == nil {
+		cpuCount := runtime.NumCPU()
 		for i, pct := range cpuPercents {
 			if i >= cpuCount {
 				break
 			}
-			perCPU[i] = pct
 			key := fmt.Sprintf("CPUutilization%d", i)
-			m.gauges[key] = pct
+			systemGauges[key] = pct
 		}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for k, v := range systemGauges {
+		m.gauges[k] = v
 	}
 }
 

@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -30,6 +31,37 @@ type Handler struct {
 
 func NewHandler(storage storage.Storage, key string) *Handler {
 	return &Handler{storage: storage, key: key}
+}
+
+func (h *Handler) HashMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.key == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		path := r.URL.Path
+		if path != "/update" && path != "/updates" && path != "/value" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		hashHeader := r.Header.Get("HashSHA256")
+		if hashHeader != "" && !h.verifyHash(bodyBytes, hashHeader) {
+			http.Error(w, `{"error": "invalid hash"}`, http.StatusBadRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (h *Handler) calculateHashBase64(data []byte) string {
+	hash := sha256.Sum256(append(data, []byte(h.key)...))
+	return base64.StdEncoding.EncodeToString(hash[:])
 }
 
 func (h *Handler) calculateHash(data []byte) []byte {
@@ -129,8 +161,7 @@ func (h *Handler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
 		h.storage.UpdateCounter(req.ID, *req.Delta)
 	}
 	if h.key != "" {
-		hash := h.calculateHash(bodyBytes)
-		w.Header().Set("HashSHA256", fmt.Sprintf("%x", hash))
+		w.Header().Set("HashSHA256", h.calculateHashBase64(bodyBytes))
 	}
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -216,8 +247,8 @@ func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.key != "" {
 		respBytes, _ := json.Marshal(resp)
-		hash := h.calculateHash(respBytes)
-		w.Header().Set("HashSHA256", fmt.Sprintf("%x", hash))
+		hash := h.calculateHashBase64(respBytes)
+		w.Header().Set("HashSHA256", hash)
 	}
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)
