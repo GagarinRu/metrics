@@ -20,7 +20,7 @@ import (
 )
 
 func getEnvString(envName string, defaultValue string) string {
-	if envVal := os.Getenv(envName); envVal != "" {
+	if envVal, ok := os.LookupEnv(envName); ok {
 		return strings.Trim(envVal, `"'`)
 	}
 	return defaultValue
@@ -36,10 +36,18 @@ func getEnvBool(envName string) bool {
 }
 
 func getEnvInt(envName string, defaultValue int) int {
-	if envVal := os.Getenv(envName); envVal != "" {
-		if v, err := strconv.Atoi(envVal); err == nil {
+	if envVal, ok := os.LookupEnv(envName); ok {
+		envVal = strings.Trim(envVal, `"'`)
+		v, err := strconv.Atoi(envVal)
+		if err == nil {
 			return v
 		}
+		logger.Log.Warn("invalid integer in environment variable, using default",
+			zap.String("env", envName),
+			zap.String("value", envVal),
+			zap.Error(err),
+			zap.Int("default", defaultValue),
+		)
 	}
 	return defaultValue
 }

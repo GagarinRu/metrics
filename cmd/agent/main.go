@@ -3,14 +3,15 @@ package main
 import (
 	"context"
 	"flag"
-	"github.com/GagarinRu/metrics/internal/agent"
-	"github.com/GagarinRu/metrics/internal/logger"
-	"go.uber.org/zap"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/GagarinRu/metrics/internal/agent"
+	"github.com/GagarinRu/metrics/internal/logger"
+	"go.uber.org/zap"
 )
 
 func getEnvInt(envName string, defaultValue int) int {
@@ -55,7 +56,7 @@ func main() {
 	flag.StringVar(&serverAddr, "a", "http://localhost:8080", "Server address")
 	flag.StringVar(&logLevel, "l", "info", "Log level")
 	flag.StringVar(&key, "k", "", "Key for hash calculation")
-	flag.IntVar(&rateLimit, "rate-limit", 1, "Rate limit (concurrent requests)")
+	flag.IntVar(&rateLimit, "rate-limit", 1, "Rate limit (concurrent batch requests)")
 	flag.Parse()
 	logLevel = getEnvString("LOG_LEVEL", logLevel)
 	serverAddr = getEnvString("ADDRESS", serverAddr)
@@ -71,13 +72,11 @@ func main() {
 		logger.Log.Error("Unknown arguments", zap.Strings("args", flag.Args()))
 		os.Exit(1)
 	}
-	useBatch := true
 	cfg := agent.Config{
 		PollInterval:   time.Duration(pollInterval) * time.Second,
 		ReportInterval: time.Duration(reportInterval) * time.Second,
 		ServerAddr:     serverAddr,
 		UseGzip:        true,
-		UseBatch:       &useBatch,
 		Key:            key,
 		RateLimit:      rateLimit,
 	}
