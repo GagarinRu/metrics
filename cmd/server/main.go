@@ -19,6 +19,39 @@ import (
 	"go.uber.org/zap"
 )
 
+func getEnvString(envName string, defaultValue string) string {
+	if envVal, ok := os.LookupEnv(envName); ok {
+		return strings.Trim(envVal, `"'`)
+	}
+	return defaultValue
+}
+
+func getEnvBool(envName string) bool {
+	if envVal := os.Getenv(envName); envVal != "" {
+		if v, err := strconv.ParseBool(envVal); err == nil {
+			return v
+		}
+	}
+	return false
+}
+
+func getEnvInt(envName string, defaultValue int) int {
+	if envVal, ok := os.LookupEnv(envName); ok {
+		envVal = strings.Trim(envVal, `"'`)
+		v, err := strconv.Atoi(envVal)
+		if err == nil {
+			return v
+		}
+		logger.Log.Warn("invalid integer in environment variable, using default",
+			zap.String("env", envName),
+			zap.String("value", envVal),
+			zap.Error(err),
+			zap.Int("default", defaultValue),
+		)
+	}
+	return defaultValue
+}
+
 func main() {
 	var (
 		addr            string
@@ -27,6 +60,7 @@ func main() {
 		fileStoragePath string
 		restore         bool
 		databaseDSN     string
+		key             string
 	)
 	flag.StringVar(&addr, "a", ":8080", "Server address")
 	flag.StringVar(&logLevel, "l", "info", "Log level")
@@ -34,29 +68,15 @@ func main() {
 	flag.StringVar(&fileStoragePath, "f", "metrics.json", "Path to file for storage metrics")
 	flag.BoolVar(&restore, "r", false, "Restore metrics from a file at startup")
 	flag.StringVar(&databaseDSN, "d", "", "Database DSN")
+	flag.StringVar(&key, "k", "", "Key for hash calculation")
 	flag.Parse()
-	if envDsn := os.Getenv("DATABASE_DSN"); envDsn != "" {
-		databaseDSN = strings.Trim(envDsn, `"'`)
-	}
-	if envAddr := os.Getenv("ADDRESS"); envAddr != "" {
-		addr = envAddr
-	}
-	if envLogLevel := os.Getenv("LOG_LEVEL"); envLogLevel != "" {
-		logLevel = envLogLevel
-	}
-	if envInterval := os.Getenv("STORE_INTERVAL"); envInterval != "" {
-		if v, err := strconv.Atoi(envInterval); err == nil {
-			storeInterval = v
-		}
-	}
-	if envFile := os.Getenv("FILE_STORAGE_PATH"); envFile != "" {
-		fileStoragePath = envFile
-	}
-	if envRestore := os.Getenv("RESTORE"); envRestore != "" {
-		if v, err := strconv.ParseBool(envRestore); err == nil {
-			restore = v
-		}
-	}
+	databaseDSN = getEnvString("DATABASE_DSN", databaseDSN)
+	addr = getEnvString("ADDRESS", addr)
+	logLevel = getEnvString("LOG_LEVEL", logLevel)
+	storeInterval = getEnvInt("STORE_INTERVAL", storeInterval)
+	fileStoragePath = getEnvString("FILE_STORAGE_PATH", fileStoragePath)
+	restore = getEnvBool("RESTORE")
+	key = getEnvString("KEY", key)
 
 	if err := logger.Initialize(logLevel); err != nil {
 		logger.Log.Fatal("Failed to initialize logger", zap.Error(err))
@@ -75,9 +95,10 @@ func main() {
 		store.Stop()
 		store.Close()
 	}()
-	h := handler.NewHandler(store)
+	h := handler.NewHandler(store, key)
 	r := chi.NewRouter()
 	r.Use(middleware.StripSlashes)
+	r.Use(h.HashMiddleware)
 	r.Get("/", h.GetAllMetrics)
 	r.Get("/value/{metricType}/{metricName}", h.GetMetric)
 	r.Post("/update/{metricType}/{metricName}/{metricValue}", h.UpdateMetrics)

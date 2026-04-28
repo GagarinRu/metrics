@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ const (
 	retryInterval1 = 1 * time.Second
 	retryInterval2 = 3 * time.Second
 	retryInterval3 = 5 * time.Second
+	reportSignalBuf = 1024
 )
 
 func isRetryableError(err error) bool {
@@ -73,7 +75,10 @@ type Agent struct {
 	serverAddr     string
 	client         *http.Client
 	useGzip        bool
-	useBatch       bool
+	key            string
+	rateLimit      int
+	reportSignal   chan struct{}
+	reportSem      chan struct{}
 	ctx            context.Context
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
@@ -84,61 +89,118 @@ type Config struct {
 	ReportInterval time.Duration
 	ServerAddr     string
 	UseGzip        bool
-	UseBatch       *bool
+	Key            string
+	RateLimit      int
 }
 
 func NewAgent(cfg Config) *Agent {
 	ctx, cancel := context.WithCancel(context.Background())
-	useBatch := true
-	if cfg.UseBatch != nil {
-		useBatch = *cfg.UseBatch
+	rateLimit := cfg.RateLimit
+	if rateLimit <= 0 {
+		rateLimit = 1
 	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxConnsPerHost = rateLimit
 	return &Agent{
 		metrics:        metrics.NewMetrics(),
 		pollInterval:   cfg.PollInterval,
 		reportInterval: cfg.ReportInterval,
 		serverAddr:     cfg.ServerAddr,
-		client:         &http.Client{Timeout: 5 * time.Second},
-		useGzip:        cfg.UseGzip,
-		useBatch:       useBatch,
-		ctx:            ctx,
-		cancel:         cancel,
+		client: &http.Client{
+			Timeout:   5 * time.Second,
+			Transport: transport,
+		},
+		useGzip:      cfg.UseGzip,
+		key:          cfg.Key,
+		rateLimit:    rateLimit,
+		reportSignal: make(chan struct{}, reportSignalBuf),
+		reportSem:    make(chan struct{}, rateLimit),
+		ctx:          ctx,
+		cancel:       cancel,
+	}
+}
+
+func calculateHash(data []byte, key string) []byte {
+	hash := sha256.Sum256(append(data, []byte(key)...))
+	return hash[:]
+}
+
+func (a *Agent) collectMetrics() {
+	defer a.wg.Done()
+	ticker := time.NewTicker(a.pollInterval)
+	defer ticker.Stop()
+	a.metrics.UpdateRuntimeMetrics()
+	a.metrics.UpdateSystemMetrics()
+	for {
+		select {
+		case <-ticker.C:
+			a.metrics.UpdateRuntimeMetrics()
+			a.metrics.UpdateSystemMetrics()
+		case <-a.ctx.Done():
+			logger.Log.Info("Stopping metrics collection goroutine")
+			return
+		}
+	}
+}
+
+func (a *Agent) reportMetrics() {
+	defer a.wg.Done()
+	ticker := time.NewTicker(a.reportInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			select {
+			case a.reportSignal <- struct{}{}:
+			case <-a.ctx.Done():
+				logger.Log.Info("Stopping report scheduler")
+				return
+			}
+		case <-a.ctx.Done():
+			logger.Log.Info("Stopping report scheduler")
+			return
+		}
+	}
+}
+
+func (a *Agent) flushReports() {
+	defer a.wg.Done()
+	for {
+		select {
+		case <-a.reportSignal:
+			a.drainReportSignals()
+			if err := a.sendBatch(a.collectAllMetrics()); err != nil {
+				logger.Log.Debug("batch send failed, will retry on next signal", zap.Error(err))
+			}
+		case <-a.ctx.Done():
+			logger.Log.Info("Sending final metrics before shutdown")
+			a.drainReportSignals()
+			_ = a.sendBatch(a.collectAllMetrics())
+			return
+		}
+	}
+}
+
+func (a *Agent) drainReportSignals() {
+	for {
+		select {
+		case <-a.reportSignal:
+		default:
+			return
+		}
 	}
 }
 
 func (a *Agent) Run(ctx context.Context) error {
 	a.wg.Add(1)
-	go func() {
-		defer a.wg.Done()
-		ticker := time.NewTicker(a.pollInterval)
-		defer ticker.Stop()
-		a.metrics.UpdateRuntimeMetrics()
-		for {
-			select {
-			case <-ticker.C:
-				a.metrics.UpdateRuntimeMetrics()
-			case <-ctx.Done():
-				logger.Log.Info("Stopping metrics collection goroutine")
-				return
-			}
-		}
-	}()
+	go a.collectMetrics()
+
 	a.wg.Add(1)
-	go func() {
-		defer a.wg.Done()
-		ticker := time.NewTicker(a.reportInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				a.sendAllMetrics()
-			case <-ctx.Done():
-				logger.Log.Info("Sending final metrics before shutdown")
-				a.sendAllMetrics()
-				return
-			}
-		}
-	}()
+	go a.reportMetrics()
+
+	a.wg.Add(1)
+	go a.flushReports()
+
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -161,44 +223,38 @@ func (a *Agent) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (a *Agent) sendAllMetrics() error {
-	if a.useBatch {
-		var metrics []models.Metrics
-		for name, value := range a.metrics.GetGauges() {
-			v := value
-			metrics = append(metrics, models.Metrics{
-				ID:    name,
-				MType: "gauge",
-				Value: &v,
-			})
-		}
-		for name, value := range a.metrics.GetCounters() {
-			d := value
-			metrics = append(metrics, models.Metrics{
-				ID:    name,
-				MType: "counter",
-				Delta: &d,
-			})
-		}
-		if len(metrics) == 0 {
-			return nil
-		}
-		return a.sendBatch(metrics)
-	}
+func (a *Agent) collectAllMetrics() []models.Metrics {
+	var allMetrics []models.Metrics
 	for name, value := range a.metrics.GetGauges() {
-		if err := a.sendMetric("gauge", name, value); err != nil {
-			return fmt.Errorf("failed to send gauge metric %s: %w", name, err)
-		}
+		v := value
+		allMetrics = append(allMetrics, models.Metrics{
+			ID:    name,
+			MType: "gauge",
+			Value: &v,
+		})
 	}
 	for name, value := range a.metrics.GetCounters() {
-		if err := a.sendMetric("counter", name, value); err != nil {
-			return fmt.Errorf("failed to send counter metric %s: %w", name, err)
-		}
+		d := value
+		allMetrics = append(allMetrics, models.Metrics{
+			ID:    name,
+			MType: "counter",
+			Delta: &d,
+		})
 	}
-	return nil
+	return allMetrics
 }
 
 func (a *Agent) sendBatch(metrics []models.Metrics) error {
+	if len(metrics) == 0 {
+		return nil
+	}
+	select {
+	case a.reportSem <- struct{}{}:
+	case <-a.ctx.Done():
+		return a.ctx.Err()
+	}
+	defer func() { <-a.reportSem }()
+
 	jsonData, err := json.Marshal(metrics)
 	if err != nil {
 		logger.Log.Error("Failed to marshal batch", zap.Error(err))
@@ -233,6 +289,10 @@ func (a *Agent) sendBatch(metrics []models.Metrics) error {
 	if a.useGzip {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
+	if a.key != "" {
+		hash := calculateHash(jsonData, a.key)
+		req.Header.Set("HashSHA256", fmt.Sprintf("%x", hash))
+	}
 	resp, err := a.sendWithRetry(req)
 	if err != nil {
 		logger.Log.Error("HTTP request failed",
@@ -256,113 +316,6 @@ func (a *Agent) sendBatch(metrics []models.Metrics) error {
 		logger.Log.Error("Server returned error",
 			zap.Int("status_code", resp.StatusCode),
 			zap.String("response_body", string(b)))
-		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(b))
-	}
-	return nil
-}
-
-func (a *Agent) sendMetric(metricType, name string, value interface{}) error {
-	var reqBody models.Metrics
-	reqBody.ID = name
-	reqBody.MType = metricType
-
-	switch metricType {
-	case "gauge":
-		if v, ok := value.(float64); ok {
-			reqBody.Value = &v
-		} else {
-			logger.Log.Error("Invalid gauge value type",
-				zap.String("name", name),
-				zap.Any("value", value))
-			return fmt.Errorf("invalid gauge value type: %T", value)
-		}
-	case "counter":
-		if v, ok := value.(int64); ok {
-			reqBody.Delta = &v
-		} else {
-			logger.Log.Error("Invalid counter value type",
-				zap.String("name", name),
-				zap.Any("value", value))
-			return fmt.Errorf("invalid counter value type: %T", value)
-		}
-	default:
-		logger.Log.Error("Unsupported metric type",
-			zap.String("type", metricType),
-			zap.String("name", name))
-		return fmt.Errorf("unsupported metric type: %s", metricType)
-
-	}
-	jsonData, err := json.Marshal(reqBody)
-	if err != nil {
-		logger.Log.Error("Failed to marshal metric",
-			zap.String("type", metricType),
-			zap.String("name", name),
-			zap.Error(err))
-		return err
-	}
-	bodyReader := bytes.NewReader(jsonData)
-	if a.useGzip {
-		var buf bytes.Buffer
-		zw := gzip.NewWriter(&buf)
-		if _, err := zw.Write(jsonData); err != nil {
-			logger.Log.Error("Failed to compress metric data",
-				zap.String("type", metricType),
-				zap.String("name", name),
-				zap.Error(err))
-			return err
-		}
-		if err := zw.Close(); err != nil {
-			logger.Log.Error("Failed to close gzip writer",
-				zap.Error(err))
-			return err
-		}
-		bodyReader = bytes.NewReader(buf.Bytes())
-	}
-	serverAddr := a.serverAddr
-	if !strings.Contains(serverAddr, "://") {
-		serverAddr = "http://" + serverAddr
-	}
-	url := serverAddr + "/update"
-	req, err := http.NewRequest(http.MethodPost, url, bodyReader)
-	if err != nil {
-		logger.Log.Error("Failed to create HTTP request",
-			zap.String("url", url),
-			zap.Error(err))
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept-Encoding", "gzip")
-	if a.useGzip {
-		req.Header.Set("Content-Encoding", "gzip")
-	}
-	resp, err := a.sendWithRetry(req)
-	if err != nil {
-		logger.Log.Error("HTTP request failed",
-			zap.String("url", url),
-			zap.String("metric_type", metricType),
-			zap.String("metric_name", name),
-			zap.Error(err))
-		return err
-	}
-	defer resp.Body.Close()
-	var respBody io.Reader = resp.Body
-	if resp.Header.Get("Content-Encoding") == "gzip" {
-		zr, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			logger.Log.Error("Failed to create gzip reader",
-				zap.Error(err))
-			return fmt.Errorf("failed to create gzip reader: %w", err)
-		}
-		defer zr.Close()
-		respBody = zr
-	}
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(respBody)
-		logger.Log.Error("Server returned error",
-			zap.Int("status_code", resp.StatusCode),
-			zap.String("response_body", string(b)),
-			zap.String("metric_type", metricType),
-			zap.String("metric_name", name))
 		return fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, string(b))
 	}
 	return nil

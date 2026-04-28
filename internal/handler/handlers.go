@@ -1,8 +1,13 @@
 package handler
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"github.com/GagarinRu/metrics/internal/logger"
@@ -21,10 +26,67 @@ const (
 
 type Handler struct {
 	storage storage.Storage
+	key    string
 }
 
-func NewHandler(storage storage.Storage) *Handler {
-	return &Handler{storage: storage}
+func NewHandler(storage storage.Storage, key string) *Handler {
+	return &Handler{storage: storage, key: key}
+}
+
+func (h *Handler) HashMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.key == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		path := r.URL.Path
+		if path != "/update" && path != "/updates" && path != "/value" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		hashHeader := r.Header.Get("HashSHA256")
+		if hashHeader != "" && !h.verifyHash(bodyBytes, hashHeader) {
+			http.Error(w, `{"error": "invalid hash"}`, http.StatusBadRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (h *Handler) calculateHashBase64(data []byte) string {
+	hash := sha256.Sum256(append(data, []byte(h.key)...))
+	return base64.StdEncoding.EncodeToString(hash[:])
+}
+
+func (h *Handler) calculateHash(data []byte) []byte {
+	hash := sha256.Sum256(append(data, []byte(h.key)...))
+	return hash[:]
+}
+
+func (h *Handler) verifyHash(data []byte, hashHex string) bool {
+	if h.key == "" {
+		return true
+	}
+	expectedHash := h.calculateHash(data)
+	receivedHash, err := hex.DecodeString(hashHex)
+	if err != nil {
+		return false
+	}
+	if len(receivedHash) != len(expectedHash) {
+		return false
+	}
+	for i := range expectedHash {
+		if expectedHash[i] != receivedHash[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *Handler) UpdateMetrics(w http.ResponseWriter, r *http.Request) {
@@ -58,8 +120,20 @@ func (h *Handler) UpdateMetrics(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	if h.key != "" && r.Header.Get("HashSHA256") != "" {
+		hashHeader := r.Header.Get("HashSHA256")
+		if !h.verifyHash(bodyBytes, hashHeader) {
+			http.Error(w, `{"error": "invalid hash"}`, http.StatusBadRequest)
+			return
+		}
+	}
 	var req models.Metrics
-	dec := json.NewDecoder(r.Body)
+	dec := json.NewDecoder(bytes.NewReader(bodyBytes))
 	if err := dec.Decode(&req); err != nil {
 		http.Error(w, `{"error": "invalid JSON"}`, http.StatusBadRequest)
 		return
@@ -85,6 +159,9 @@ func (h *Handler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.storage.UpdateCounter(req.ID, *req.Delta)
+	}
+	if h.key != "" {
+		w.Header().Set("HashSHA256", h.calculateHashBase64(bodyBytes))
 	}
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -120,8 +197,20 @@ func (h *Handler) GetMetric(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	if h.key != "" && len(bodyBytes) > 0 {
+		hashHeader := r.Header.Get("HashSHA256")
+		if hashHeader != "" && !h.verifyHash(bodyBytes, hashHeader) {
+			http.Error(w, `{"error": "invalid hash"}`, http.StatusBadRequest)
+			return
+		}
+	}
 	var req models.Metrics
-	dec := json.NewDecoder(r.Body)
+	dec := json.NewDecoder(bytes.NewReader(bodyBytes))
 	if err := dec.Decode(&req); err != nil {
 		http.Error(w, `{"error": "invalid JSON"}`, http.StatusBadRequest)
 		return
@@ -155,6 +244,11 @@ func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resp.Delta = &value
+	}
+	if h.key != "" {
+		respBytes, _ := json.Marshal(resp)
+		hash := h.calculateHashBase64(respBytes)
+		w.Header().Set("HashSHA256", hash)
 	}
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)
@@ -191,8 +285,24 @@ func (h *Handler) PingDataBase(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) UpdateMetricsBatch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	if h.key != "" {
+		hashHeader := r.Header.Get("HashSHA256")
+		if hashHeader == "" {
+			http.Error(w, `{"error": "hash is required"}`, http.StatusBadRequest)
+			return
+		}
+		if !h.verifyHash(bodyBytes, hashHeader) {
+			http.Error(w, `{"error": "invalid hash"}`, http.StatusBadRequest)
+			return
+		}
+	}
 	var req []models.Metrics
-	dec := json.NewDecoder(r.Body)
+	dec := json.NewDecoder(bytes.NewReader(bodyBytes))
 	if err := dec.Decode(&req); err != nil {
 		http.Error(w, `{"error": "invalid JSON"}`, http.StatusBadRequest)
 		return
@@ -228,6 +338,10 @@ func (h *Handler) UpdateMetricsBatch(w http.ResponseWriter, r *http.Request) {
 		logger.Log.Error("Failed to update batch", zap.Error(err))
 		http.Error(w, `{"error": "internal error"}`, http.StatusInternalServerError)
 		return
+	}
+	if h.key != "" {
+		hash := h.calculateHash(bodyBytes)
+		w.Header().Set("HashSHA256", fmt.Sprintf("%x", hash))
 	}
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
