@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,11 +17,11 @@ import (
 	"github.com/GagarinRu/metrics/internal/models"
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
-	"go.uber.org/zap"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/lib/pq"
+	"go.uber.org/zap"
 )
 
 const (
@@ -383,7 +385,7 @@ func (ms *MemStorage) GetCounter(name string) (int64, bool) {
 func (ms *MemStorage) GetAllGauges() map[string]float64 {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	result := make(map[string]float64)
+	result := make(map[string]float64, len(ms.metrics))
 	for name, m := range ms.metrics {
 		if m.MType == "gauge" && m.Value != nil {
 			result[name] = *m.Value
@@ -395,13 +397,39 @@ func (ms *MemStorage) GetAllGauges() map[string]float64 {
 func (ms *MemStorage) GetAllCounters() map[string]int64 {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	result := make(map[string]int64)
+	result := make(map[string]int64, len(ms.metrics))
 	for name, m := range ms.metrics {
 		if m.MType == "counter" && m.Delta != nil {
 			result[name] = *m.Delta
 		}
 	}
 	return result
+}
+
+func (ms *MemStorage) WriteMetricsHTML(w io.Writer) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	io.WriteString(w, "<html><body><h1>Metrics</h1><h2>Gauges:</h2><ul>")
+	for name, m := range ms.metrics {
+		if m.MType == "gauge" && m.Value != nil {
+			io.WriteString(w, "<li>")
+			io.WriteString(w, name)
+			io.WriteString(w, ": ")
+			io.WriteString(w, strconv.FormatFloat(*m.Value, 'f', -1, 64))
+			io.WriteString(w, "</li>")
+		}
+	}
+	io.WriteString(w, "</ul><h2>Counters:</h2><ul>")
+	for name, m := range ms.metrics {
+		if m.MType == "counter" && m.Delta != nil {
+			io.WriteString(w, "<li>")
+			io.WriteString(w, name)
+			io.WriteString(w, ": ")
+			io.WriteString(w, strconv.FormatInt(*m.Delta, 10))
+			io.WriteString(w, "</li>")
+		}
+	}
+	io.WriteString(w, "</ul></body></html>")
 }
 
 func (ms *MemStorage) Save() error {
@@ -411,7 +439,7 @@ func (ms *MemStorage) Save() error {
 		metricsList = append(metricsList, m)
 	}
 	ms.mu.RUnlock()
-	data, err := json.MarshalIndent(metricsList, "", "  ")
+	data, err := json.Marshal(metricsList)
 	if err != nil {
 		return err
 	}

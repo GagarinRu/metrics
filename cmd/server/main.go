@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/GagarinRu/metrics/internal/audit"
 	"github.com/GagarinRu/metrics/internal/handler"
 	"github.com/GagarinRu/metrics/internal/logger"
 	"github.com/GagarinRu/metrics/internal/storage"
@@ -61,6 +63,8 @@ func main() {
 		restore         bool
 		databaseDSN     string
 		key             string
+		auditFile       string
+		auditURL        string
 	)
 	flag.StringVar(&addr, "a", ":8080", "Server address")
 	flag.StringVar(&logLevel, "l", "info", "Log level")
@@ -69,6 +73,8 @@ func main() {
 	flag.BoolVar(&restore, "r", false, "Restore metrics from a file at startup")
 	flag.StringVar(&databaseDSN, "d", "", "Database DSN")
 	flag.StringVar(&key, "k", "", "Key for hash calculation")
+	flag.StringVar(&auditFile, "audit-file", "", "Path to audit log file")
+	flag.StringVar(&auditURL, "audit-url", "", "URL for audit log delivery")
 	flag.Parse()
 	databaseDSN = getEnvString("DATABASE_DSN", databaseDSN)
 	addr = getEnvString("ADDRESS", addr)
@@ -77,6 +83,8 @@ func main() {
 	fileStoragePath = getEnvString("FILE_STORAGE_PATH", fileStoragePath)
 	restore = getEnvBool("RESTORE")
 	key = getEnvString("KEY", key)
+	auditFile = getEnvString("AUDIT_FILE", auditFile)
+	auditURL = getEnvString("AUDIT_URL", auditURL)
 
 	if err := logger.Initialize(logLevel); err != nil {
 		logger.Log.Fatal("Failed to initialize logger", zap.Error(err))
@@ -90,15 +98,17 @@ func main() {
 		zap.String("database_dsn", databaseDSN),
 	)
 
+	auditor := audit.NewPublisher(auditFile, auditURL)
 	store := storage.NewMemStorageWithFile(fileStoragePath, storeInterval, restore, databaseDSN)
 	defer func() {
 		store.Stop()
 		store.Close()
 	}()
-	h := handler.NewHandler(store, key)
+	h := handler.NewHandler(store, key, auditor)
 	r := chi.NewRouter()
 	r.Use(middleware.StripSlashes)
 	r.Use(h.HashMiddleware)
+	r.Mount("/debug", middleware.Profiler())
 	r.Get("/", h.GetAllMetrics)
 	r.Get("/value/{metricType}/{metricName}", h.GetMetric)
 	r.Post("/update/{metricType}/{metricName}/{metricValue}", h.UpdateMetrics)

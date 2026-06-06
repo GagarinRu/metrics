@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+
 	"github.com/GagarinRu/metrics/internal/logger"
 	"github.com/GagarinRu/metrics/internal/metrics"
 	"github.com/GagarinRu/metrics/internal/models"
@@ -22,10 +23,10 @@ import (
 )
 
 const (
-	maxRetries     = 3
-	retryInterval1 = 1 * time.Second
-	retryInterval2 = 3 * time.Second
-	retryInterval3 = 5 * time.Second
+	maxRetries      = 3
+	retryInterval1  = 1 * time.Second
+	retryInterval2  = 3 * time.Second
+	retryInterval3  = 5 * time.Second
 	reportSignalBuf = 1024
 )
 
@@ -121,8 +122,10 @@ func NewAgent(cfg Config) *Agent {
 }
 
 func calculateHash(data []byte, key string) []byte {
-	hash := sha256.Sum256(append(data, []byte(key)...))
-	return hash[:]
+	hasher := sha256.New()
+	hasher.Write(data)
+	hasher.Write([]byte(key))
+	return hasher.Sum(nil)
 }
 
 func (a *Agent) collectMetrics() {
@@ -224,24 +227,7 @@ func (a *Agent) Shutdown(ctx context.Context) error {
 }
 
 func (a *Agent) collectAllMetrics() []models.Metrics {
-	var allMetrics []models.Metrics
-	for name, value := range a.metrics.GetGauges() {
-		v := value
-		allMetrics = append(allMetrics, models.Metrics{
-			ID:    name,
-			MType: "gauge",
-			Value: &v,
-		})
-	}
-	for name, value := range a.metrics.GetCounters() {
-		d := value
-		allMetrics = append(allMetrics, models.Metrics{
-			ID:    name,
-			MType: "counter",
-			Delta: &d,
-		})
-	}
-	return allMetrics
+	return a.metrics.CollectAll()
 }
 
 func (a *Agent) sendBatch(metrics []models.Metrics) error {
