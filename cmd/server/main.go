@@ -99,6 +99,7 @@ func main() {
 	)
 
 	auditor := audit.NewPublisher(auditFile, auditURL)
+	defer auditor.Close()
 	store := storage.NewMemStorageWithFile(fileStoragePath, storeInterval, restore, databaseDSN)
 	defer func() {
 		store.Stop()

@@ -16,6 +16,7 @@ func TestPublisher_NotifyFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.log")
 	p := NewPublisher(path, "")
 	require.NotNil(t, p)
+	defer p.Close()
 
 	p.Notify([]string{"Alloc", "HeapAlloc"}, "127.0.0.1")
 
@@ -26,8 +27,25 @@ func TestPublisher_NotifyFile(t *testing.T) {
 	assert.Contains(t, content, "127.0.0.1")
 }
 
-func TestPublisher_NilWithoutObservers(t *testing.T) {
-	assert.Nil(t, NewPublisher("", ""))
+func TestPublisher_NotifyWithoutObservers(t *testing.T) {
+	p := NewPublisher("", "")
+	require.NotNil(t, p)
+	assert.NotPanics(t, func() { p.Notify([]string{"Alloc"}, "127.0.0.1") })
+}
+
+func TestPublisher_Close(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	p := NewPublisher(path, "")
+	require.NotNil(t, p)
+
+	p.Notify([]string{"Alloc"}, "127.0.0.1")
+	assert.NoError(t, p.Close())
+
+	p.Notify([]string{"HeapAlloc"}, "127.0.0.1")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "Alloc")
+	assert.NotContains(t, string(data), "HeapAlloc")
 }
 
 func TestClientIP(t *testing.T) {
@@ -51,6 +69,7 @@ func TestPublisher_NotifyURL(t *testing.T) {
 
 	p := NewPublisher("", srv.URL)
 	require.NotNil(t, p)
+	defer p.Close()
 	p.Notify([]string{"PollCount"}, "10.0.0.1")
 	assert.True(t, strings.Contains(received, "PollCount"))
 }

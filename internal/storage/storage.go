@@ -88,6 +88,7 @@ type Storage interface {
 	GetCounter(name string) (int64, bool)
 	GetAllGauges() map[string]float64
 	GetAllCounters() map[string]int64
+	WriteMetricsHTML(w io.Writer)
 	Ping() error
 	Close() error
 }

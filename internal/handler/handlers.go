@@ -278,21 +278,7 @@ func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) GetAllMetrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if ms, ok := h.storage.(*storage.MemStorage); ok {
-		ms.WriteMetricsHTML(w)
-		return
-	}
-	gauges := h.storage.GetAllGauges()
-	counters := h.storage.GetAllCounters()
-	fmt.Fprintf(w, "<html><body><h1>Metrics</h1><h2>Gauges:</h2><ul>")
-	for name, value := range gauges {
-		fmt.Fprintf(w, "<li>%s: %v</li>", name, value)
-	}
-	fmt.Fprintf(w, "</ul><h2>Counters:</h2><ul>")
-	for name, value := range counters {
-		fmt.Fprintf(w, "<li>%s: %v</li>", name, value)
-	}
-	fmt.Fprintf(w, "</ul></body></html>")
+	h.storage.WriteMetricsHTML(w)
 }
 
 func (h *Handler) PingDataBase(w http.ResponseWriter, r *http.Request) {
