@@ -16,7 +16,7 @@ func TestPublisher_NotifyFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.log")
 	p := NewPublisher(path, "")
 	require.NotNil(t, p)
-	defer p.Close()
+	defer func() { _ = p.Close() }()
 
 	p.Notify([]string{"Alloc", "HeapAlloc"}, "127.0.0.1")
 
@@ -69,7 +69,18 @@ func TestPublisher_NotifyURL(t *testing.T) {
 
 	p := NewPublisher("", srv.URL)
 	require.NotNil(t, p)
-	defer p.Close()
+	defer func() { _ = p.Close() }()
 	p.Notify([]string{"PollCount"}, "10.0.0.1")
 	assert.True(t, strings.Contains(received, "PollCount"))
+}
+
+func TestFileObserverClose(t *testing.T) {
+	o, err := newFileObserver(filepath.Join(t.TempDir(), "audit.log"))
+	require.NoError(t, err)
+	require.NoError(t, o.Close())
+}
+
+func TestURLObserverID(t *testing.T) {
+	o := newURLObserver("http://localhost/audit")
+	assert.Equal(t, "url:http://localhost/audit", o.ID())
 }

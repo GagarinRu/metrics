@@ -1,3 +1,4 @@
+// Package audit publishes audit events to a file and over HTTP.
 package audit
 
 import (
@@ -98,8 +99,8 @@ func (f *fileObserver) Update(event Event) {
 	if f.file == nil {
 		return
 	}
-	f.file.Write(data)
-	f.file.Write([]byte("\n"))
+	_, _ = f.file.Write(data)
+	_, _ = f.file.Write([]byte("\n"))
 }
 
 func (f *fileObserver) Close() error {
@@ -136,7 +137,11 @@ func (u *urlObserver) Update(event Event) {
 	if err != nil {
 		return
 	}
-	u.client.Post(u.url, "application/json", bytes.NewReader(data))
+	resp, err := u.client.Post(u.url, "application/json", bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
 }
 
 func ClientIP(r *http.Request) string {

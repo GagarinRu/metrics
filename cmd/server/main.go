@@ -55,6 +55,7 @@ func getEnvInt(envName string, defaultValue int) int {
 }
 
 func main() {
+	printBuildInfo()
 	var (
 		addr            string
 		logLevel        string
@@ -89,7 +90,7 @@ func main() {
 	if err := logger.Initialize(logLevel); err != nil {
 		logger.Log.Fatal("Failed to initialize logger", zap.Error(err))
 	}
-	defer logger.Log.Sync()
+	defer func() { _ = logger.Log.Sync() }()
 	logger.Log.Info("Starting server",
 		zap.String("address", addr),
 		zap.String("file_storage_path", fileStoragePath),
@@ -99,11 +100,11 @@ func main() {
 	)
 
 	auditor := audit.NewPublisher(auditFile, auditURL)
-	defer auditor.Close()
+	defer func() { _ = auditor.Close() }()
 	store := storage.NewMemStorageWithFile(fileStoragePath, storeInterval, restore, databaseDSN)
 	defer func() {
 		store.Stop()
-		store.Close()
+		_ = store.Close()
 	}()
 	h := handler.NewHandler(store, key, auditor)
 	r := chi.NewRouter()
@@ -143,7 +144,7 @@ func gzipMiddleware(next http.Handler) http.Handler {
 		if supportsGzip {
 			cw := newCompressWriter(w)
 			ow = cw
-			defer cw.Close()
+			defer func() { _ = cw.Close() }()
 		}
 		contentEncoding := r.Header.Get("Content-Encoding")
 		sendsGzip := strings.Contains(contentEncoding, "gzip")
@@ -154,7 +155,7 @@ func gzipMiddleware(next http.Handler) http.Handler {
 				return
 			}
 			r.Body = cr
-			defer cr.Close()
+			defer func() { _ = cr.Close() }()
 		}
 		next.ServeHTTP(ow, r)
 	})

@@ -66,14 +66,14 @@ func BenchmarkSystemLoad(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		req, _ = http.NewRequest(http.MethodGet, srv.URL+"/", nil)
 		resp, err = http.DefaultClient.Do(req)
 		if err != nil {
 			b.Fatal(err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		store.GetAllGauges()
 		store.GetAllCounters()

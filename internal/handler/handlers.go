@@ -1,3 +1,4 @@
+// Package handler provides HTTP handlers for the metrics server.
 package handler
 
 import (
@@ -122,7 +123,7 @@ func (h *Handler) UpdateMetrics(w http.ResponseWriter, r *http.Request) {
 		h.storage.UpdateGauge(metricName, value)
 		h.notifyAudit(r, metricName)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		_, _ = w.Write([]byte("OK"))
 	case MetricCounter:
 		value, err := strconv.ParseInt(metricValue, 10, 64)
 		if err != nil {
@@ -132,7 +133,7 @@ func (h *Handler) UpdateMetrics(w http.ResponseWriter, r *http.Request) {
 		h.storage.UpdateCounter(metricName, value)
 		h.notifyAudit(r, metricName)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		_, _ = w.Write([]byte("OK"))
 	default:
 		http.Error(w, "Invalid metric type", http.StatusBadRequest)
 		return
@@ -186,7 +187,7 @@ func (h *Handler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("HashSHA256", h.calculateHashBase64(bodyBytes))
 	}
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func (h *Handler) GetMetric(w http.ResponseWriter, r *http.Request) {
@@ -201,7 +202,7 @@ func (h *Handler) GetMetric(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(strconv.FormatFloat(value, 'f', -1, 64)))
+		_, _ = w.Write([]byte(strconv.FormatFloat(value, 'f', -1, 64)))
 	case MetricCounter:
 		value, ok := h.storage.GetCounter(metricName)
 		if !ok {
@@ -210,7 +211,7 @@ func (h *Handler) GetMetric(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(strconv.FormatInt(value, 10)))
+		_, _ = w.Write([]byte(strconv.FormatInt(value, 10)))
 	default:
 		http.Error(w, "Invalid metric type", http.StatusBadRequest)
 		return
@@ -254,7 +255,7 @@ func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 		value, ok := h.storage.GetGauge(req.ID)
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]string{"error": "metric not found"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "metric not found"})
 			return
 		}
 		resp.Value = &value
@@ -262,7 +263,7 @@ func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 		value, ok := h.storage.GetCounter(req.ID)
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]string{"error": "metric not found"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "metric not found"})
 			return
 		}
 		resp.Delta = &value
@@ -273,7 +274,7 @@ func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("HashSHA256", hash)
 	}
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (h *Handler) GetAllMetrics(w http.ResponseWriter, r *http.Request) {
@@ -288,7 +289,7 @@ func (h *Handler) PingDataBase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	_, _ = w.Write([]byte("OK"))
 }
 
 func (h *Handler) UpdateMetricsBatch(w http.ResponseWriter, r *http.Request) {
@@ -317,7 +318,7 @@ func (h *Handler) UpdateMetricsBatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req) == 0 {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		return
 	}
 	for _, m := range req {
@@ -357,5 +358,5 @@ func (h *Handler) UpdateMetricsBatch(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("HashSHA256", fmt.Sprintf("%x", hash))
 	}
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

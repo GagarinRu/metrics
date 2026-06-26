@@ -37,7 +37,7 @@ func ExampleHandler_UpdateMetrics() {
 		fmt.Println("error:", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	fmt.Println(resp.StatusCode)
 }
 
@@ -45,14 +45,16 @@ func ExampleHandler_GetMetric() {
 	srv := exampleServer()
 	defer srv.Close()
 
-	_, _ = http.Post(srv.URL+"/update/gauge/Alloc/42.5", "text/plain", nil)
+	if postResp, _ := http.Post(srv.URL+"/update/gauge/Alloc/42.5", "text/plain", nil); postResp != nil {
+		_ = postResp.Body.Close()
+	}
 
 	resp, err := http.Get(srv.URL + "/value/gauge/Alloc")
 	if err != nil {
 		fmt.Println("error:", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	fmt.Println(string(body))
 }
@@ -67,7 +69,7 @@ func ExampleHandler_UpdateMetricsJSON() {
 		fmt.Println("error:", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	fmt.Println(resp.StatusCode)
 }
 
@@ -75,7 +77,9 @@ func ExampleHandler_GetMetricJSON() {
 	srv := exampleServer()
 	defer srv.Close()
 
-	_, _ = http.Post(srv.URL+"/update/gauge/HeapAlloc/512", "text/plain", nil)
+	if postResp, _ := http.Post(srv.URL+"/update/gauge/HeapAlloc/512", "text/plain", nil); postResp != nil {
+		_ = postResp.Body.Close()
+	}
 
 	payload := `{"id":"HeapAlloc","type":"gauge"}`
 	resp, err := http.Post(srv.URL+"/value", "application/json", strings.NewReader(payload))
@@ -83,7 +87,7 @@ func ExampleHandler_GetMetricJSON() {
 		fmt.Println("error:", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var m models.Metrics
 	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
@@ -108,7 +112,7 @@ func ExampleHandler_UpdateMetricsBatch() {
 		fmt.Println("error:", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	fmt.Println(resp.StatusCode)
 }
 
@@ -116,13 +120,15 @@ func ExampleHandler_GetAllMetrics() {
 	srv := exampleServer()
 	defer srv.Close()
 
-	_, _ = http.Post(srv.URL+"/update/gauge/Alloc/100", "text/plain", nil)
+	if postResp, _ := http.Post(srv.URL+"/update/gauge/Alloc/100", "text/plain", nil); postResp != nil {
+		_ = postResp.Body.Close()
+	}
 
 	resp, err := http.Get(srv.URL + "/")
 	if err != nil {
 		fmt.Println("error:", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	fmt.Println(resp.StatusCode)
 }

@@ -37,7 +37,7 @@ func TestHandler_UpdateAndGetMetric(t *testing.T) {
 	resp, err := http.Post(srv.URL+"/update/gauge/Alloc/42.5", "text/plain", nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	val, ok := store.GetGauge("Alloc")
 	assert.True(t, ok)
@@ -47,7 +47,7 @@ func TestHandler_UpdateAndGetMetric(t *testing.T) {
 	resp, err = http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body := make([]byte, 64)
 	n, _ := resp.Body.Read(body)
 	assert.Equal(t, "42.5", string(body[:n]))
@@ -61,7 +61,7 @@ func TestHandler_UpdateMetricsJSON(t *testing.T) {
 	resp, err := http.Post(srv.URL+"/update", "application/json", strings.NewReader(payload))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }
 
 func TestHandler_UpdateMetricsBatch(t *testing.T) {
@@ -77,7 +77,7 @@ func TestHandler_UpdateMetricsBatch(t *testing.T) {
 	resp, err := http.Post(srv.URL+"/updates", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	_, ok := store.GetGauge("g")
 	assert.True(t, ok)
@@ -93,7 +93,7 @@ func TestHandler_GetAllMetrics(t *testing.T) {
 	resp, err := http.Get(srv.URL + "/")
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	buf := new(bytes.Buffer)
 	_, _ = buf.ReadFrom(resp.Body)
 	assert.Contains(t, buf.String(), "Alloc")
@@ -108,7 +108,7 @@ func TestHandler_GetMetricJSON(t *testing.T) {
 	resp, err := http.Post(srv.URL+"/value", "application/json", strings.NewReader(payload))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var m models.Metrics
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&m))
@@ -124,7 +124,17 @@ func TestHandler_InvalidMetricType(t *testing.T) {
 	resp, err := http.Post(srv.URL+"/update/unknown/test/1", "text/plain", nil)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	resp.Body.Close()
+	_ = resp.Body.Close()
+}
+
+func TestHandler_PingWithoutDB(t *testing.T) {
+	_, srv := newTestRouter("")
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/ping")
+	require.NoError(t, err)
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	_ = resp.Body.Close()
 }
 
 func TestHandler_HashVerification(t *testing.T) {
@@ -141,5 +151,5 @@ func TestHandler_HashVerification(t *testing.T) {
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 }

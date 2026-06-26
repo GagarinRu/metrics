@@ -1,3 +1,4 @@
+// Package storage implements metric storage in memory, files, and databases.
 package storage
 
 import (
@@ -130,11 +131,11 @@ func NewMemStorageWithFile(filePath string, interval int, restore bool, dsn stri
 					}
 				} else {
 					logger.Log.Error("Failed to ping database", zap.Error(err))
-					db.Close()
+					_ = db.Close()
 				}
 			} else {
 				logger.Log.Error("Failed to apply migrations", zap.Error(err))
-				db.Close()
+				_ = db.Close()
 			}
 		} else {
 			logger.Log.Error("Failed to open database", zap.Error(err))
@@ -188,7 +189,7 @@ func (ms *MemStorage) loadFromDB() error {
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 	for rows.Next() {
@@ -299,7 +300,7 @@ func (ms *MemStorage) UpdateBatch(metrics []models.Metrics) error {
 			if err != nil {
 				return err
 			}
-			defer tx.Rollback()
+			defer func() { _ = tx.Rollback() }()
 			for _, m := range metrics {
 				if m.MType == "gauge" && m.Value != nil {
 					_, err := tx.ExecContext(ctx,
@@ -410,27 +411,27 @@ func (ms *MemStorage) GetAllCounters() map[string]int64 {
 func (ms *MemStorage) WriteMetricsHTML(w io.Writer) {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	io.WriteString(w, "<html><body><h1>Metrics</h1><h2>Gauges:</h2><ul>")
+	_, _ = io.WriteString(w, "<html><body><h1>Metrics</h1><h2>Gauges:</h2><ul>")
 	for name, m := range ms.metrics {
 		if m.MType == "gauge" && m.Value != nil {
-			io.WriteString(w, "<li>")
-			io.WriteString(w, name)
-			io.WriteString(w, ": ")
-			io.WriteString(w, strconv.FormatFloat(*m.Value, 'f', -1, 64))
-			io.WriteString(w, "</li>")
+			_, _ = io.WriteString(w, "<li>")
+			_, _ = io.WriteString(w, name)
+			_, _ = io.WriteString(w, ": ")
+			_, _ = io.WriteString(w, strconv.FormatFloat(*m.Value, 'f', -1, 64))
+			_, _ = io.WriteString(w, "</li>")
 		}
 	}
-	io.WriteString(w, "</ul><h2>Counters:</h2><ul>")
+	_, _ = io.WriteString(w, "</ul><h2>Counters:</h2><ul>")
 	for name, m := range ms.metrics {
 		if m.MType == "counter" && m.Delta != nil {
-			io.WriteString(w, "<li>")
-			io.WriteString(w, name)
-			io.WriteString(w, ": ")
-			io.WriteString(w, strconv.FormatInt(*m.Delta, 10))
-			io.WriteString(w, "</li>")
+			_, _ = io.WriteString(w, "<li>")
+			_, _ = io.WriteString(w, name)
+			_, _ = io.WriteString(w, ": ")
+			_, _ = io.WriteString(w, strconv.FormatInt(*m.Delta, 10))
+			_, _ = io.WriteString(w, "</li>")
 		}
 	}
-	io.WriteString(w, "</ul></body></html>")
+	_, _ = io.WriteString(w, "</ul></body></html>")
 }
 
 func (ms *MemStorage) Save() error {
