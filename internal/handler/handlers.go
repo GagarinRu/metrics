@@ -7,9 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"strconv"
+
+	"github.com/GagarinRu/metrics/internal/audit"
 	"github.com/GagarinRu/metrics/internal/logger"
 	"github.com/GagarinRu/metrics/internal/models"
 	"github.com/GagarinRu/metrics/internal/storage"
@@ -26,11 +29,19 @@ const (
 
 type Handler struct {
 	storage storage.Storage
-	key    string
+	key     string
+	auditor *audit.Publisher
 }
 
-func NewHandler(storage storage.Storage, key string) *Handler {
-	return &Handler{storage: storage, key: key}
+func NewHandler(storage storage.Storage, key string, auditor *audit.Publisher) *Handler {
+	return &Handler{storage: storage, key: key, auditor: auditor}
+}
+
+func (h *Handler) notifyAudit(r *http.Request, metrics ...string) {
+	if h.auditor == nil {
+		return
+	}
+	h.auditor.Notify(metrics, audit.ClientIP(r))
 }
 
 func (h *Handler) HashMiddleware(next http.Handler) http.Handler {
@@ -59,14 +70,22 @@ func (h *Handler) HashMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+func (h *Handler) writeHash(hasher hash.Hash, data []byte) {
+	hasher.Reset()
+	hasher.Write(data)
+	hasher.Write([]byte(h.key))
+}
+
 func (h *Handler) calculateHashBase64(data []byte) string {
-	hash := sha256.Sum256(append(data, []byte(h.key)...))
-	return base64.StdEncoding.EncodeToString(hash[:])
+	hasher := sha256.New()
+	h.writeHash(hasher, data)
+	return base64.StdEncoding.EncodeToString(hasher.Sum(nil))
 }
 
 func (h *Handler) calculateHash(data []byte) []byte {
-	hash := sha256.Sum256(append(data, []byte(h.key)...))
-	return hash[:]
+	hasher := sha256.New()
+	h.writeHash(hasher, data)
+	return hasher.Sum(nil)
 }
 
 func (h *Handler) verifyHash(data []byte, hashHex string) bool {
@@ -101,6 +120,7 @@ func (h *Handler) UpdateMetrics(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.storage.UpdateGauge(metricName, value)
+		h.notifyAudit(r, metricName)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	case MetricCounter:
@@ -110,6 +130,7 @@ func (h *Handler) UpdateMetrics(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.storage.UpdateCounter(metricName, value)
+		h.notifyAudit(r, metricName)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	default:
@@ -160,6 +181,7 @@ func (h *Handler) UpdateMetricsJSON(w http.ResponseWriter, r *http.Request) {
 		}
 		h.storage.UpdateCounter(req.ID, *req.Delta)
 	}
+	h.notifyAudit(r, req.ID)
 	if h.key != "" {
 		w.Header().Set("HashSHA256", h.calculateHashBase64(bodyBytes))
 	}
@@ -255,22 +277,8 @@ func (h *Handler) GetMetricJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetAllMetrics(w http.ResponseWriter, r *http.Request) {
-	gauges := h.storage.GetAllGauges()
-	counters := h.storage.GetAllCounters()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, "<html><body>")
-	fmt.Fprintf(w, "<h1>Metrics</h1>")
-	fmt.Fprintf(w, "<h2>Gauges:</h2><ul>")
-	for name, value := range gauges {
-		fmt.Fprintf(w, "<li>%s: %v</li>", name, value)
-	}
-	fmt.Fprintf(w, "</ul>")
-	fmt.Fprintf(w, "<h2>Counters:</h2><ul>")
-	for name, value := range counters {
-		fmt.Fprintf(w, "<li>%s: %v</li>", name, value)
-	}
-	fmt.Fprintf(w, "</ul>")
-	fmt.Fprintf(w, "</body></html>")
+	h.storage.WriteMetricsHTML(w)
 }
 
 func (h *Handler) PingDataBase(w http.ResponseWriter, r *http.Request) {
@@ -339,6 +347,11 @@ func (h *Handler) UpdateMetricsBatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "internal error"}`, http.StatusInternalServerError)
 		return
 	}
+	metricNames := make([]string, len(req))
+	for i, m := range req {
+		metricNames[i] = m.ID
+	}
+	h.notifyAudit(r, metricNames...)
 	if h.key != "" {
 		hash := h.calculateHash(bodyBytes)
 		w.Header().Set("HashSHA256", fmt.Sprintf("%x", hash))
