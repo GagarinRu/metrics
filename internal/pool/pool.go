@@ -14,7 +14,8 @@ type Pool[T Resetter] struct {
 	pool sync.Pool
 }
 
-func New[T Resetter]() *Pool[T] {	p := &Pool[T]{}
+func New[T Resetter]() *Pool[T] {
+	p := &Pool[T]{}
 	p.pool.New = func() any {
 		return newValue[T]()
 	}
@@ -30,7 +31,8 @@ func newValue[T Resetter]() T {
 	return v
 }
 
-func (p *Pool[T]) Get() T {	v := p.pool.Get()
+func (p *Pool[T]) Get() T {
+	v := p.pool.Get()
 	if v == nil {
 		var zero T
 		return zero
@@ -38,6 +40,7 @@ func (p *Pool[T]) Get() T {	v := p.pool.Get()
 	return v.(T)
 }
 
-func (p *Pool[T]) Put(x T) {	x.Reset()
+func (p *Pool[T]) Put(x T) {
+	x.Reset()
 	p.pool.Put(x)
 }

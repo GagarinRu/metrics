@@ -46,10 +46,9 @@ func main() {
 	}
 
 	for _, pkg := range pkgs {
-		if len(pkg.Errors) > 0 || pkg.Name == "main" && strings.HasSuffix(pkg.PkgPath, "/cmd/reset") {
-			continue
-		}
-		if strings.HasSuffix(pkg.PkgPath, "/cmd/reset") || strings.HasSuffix(pkg.PkgPath, "/cmd/staticlint") {
+		if len(pkg.Errors) > 0 ||
+			strings.HasSuffix(pkg.PkgPath, "/cmd/reset") ||
+			strings.HasSuffix(pkg.PkgPath, "/cmd/staticlint") {
 			continue
 		}
 
