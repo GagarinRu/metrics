@@ -17,7 +17,7 @@ func setupBenchHandler(metricCount int) (*Handler, *httptest.Server) {
 	for i := 0; i < metricCount; i++ {
 		store.UpdateGauge("g"+string(rune('a'+i%26)), float64(i))
 	}
-	h := NewHandler(store, "bench-key", nil)
+	h := NewHandler(store, "bench-key", nil, nil)
 	r := chi.NewRouter()
 	r.Get("/", h.GetAllMetrics)
 	r.Post("/updates", h.UpdateMetricsBatch)
@@ -66,7 +66,7 @@ func BenchmarkGetAllMetrics(b *testing.B) {
 }
 
 func BenchmarkCalculateHash(b *testing.B) {
-	h := NewHandler(storage.NewMemStorage(), "secret-key", nil)
+	h := NewHandler(storage.NewMemStorage(), "secret-key", nil, nil)
 	data := []byte(`{"id":"Alloc","type":"gauge","value":123.45}`)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

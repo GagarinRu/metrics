@@ -20,7 +20,7 @@ func TestHandlerNotifyAudit(t *testing.T) {
 	auditor := audit.NewPublisher(path, "")
 	defer func() { _ = auditor.Close() }()
 
-	h := NewHandler(store, "", auditor)
+	h := NewHandler(store, "", nil, auditor)
 	r := chi.NewRouter()
 	r.Post("/update/{metricType}/{metricName}/{metricValue}", h.UpdateMetrics)
 	srv := httptest.NewServer(r)

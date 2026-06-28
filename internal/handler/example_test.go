@@ -17,7 +17,7 @@ import (
 
 func exampleServer() *httptest.Server {
 	store := storage.NewMemStorage()
-	h := handler.NewHandler(store, "", nil)
+	h := handler.NewHandler(store, "", nil, nil)
 	r := chi.NewRouter()
 	r.Get("/", h.GetAllMetrics)
 	r.Get("/value/{metricType}/{metricName}", h.GetMetric)

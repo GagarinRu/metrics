@@ -15,7 +15,7 @@ import (
 
 func TestHandler_HashMiddlewareInvalidHash(t *testing.T) {
 	store := storage.NewMemStorage()
-	h := handler.NewHandler(store, "secret", nil)
+	h := handler.NewHandler(store, "secret", nil, nil)
 	r := chi.NewRouter()
 	r.Use(h.HashMiddleware)
 	r.Post("/update", h.UpdateMetricsJSON)
@@ -37,7 +37,7 @@ func TestHandler_HashMiddlewareInvalidHash(t *testing.T) {
 
 func TestHandler_HashMiddlewareSkipsOtherPaths(t *testing.T) {
 	store := storage.NewMemStorage()
-	h := handler.NewHandler(store, "secret", nil)
+	h := handler.NewHandler(store, "secret", nil, nil)
 	r := chi.NewRouter()
 	r.Use(h.HashMiddleware)
 	r.Post("/update/{metricType}/{metricName}/{metricValue}", h.UpdateMetrics)
@@ -53,7 +53,7 @@ func TestHandler_HashMiddlewareSkipsOtherPaths(t *testing.T) {
 
 func TestHandler_GetMetricJSONNotFound(t *testing.T) {
 	store := storage.NewMemStorage()
-	h := handler.NewHandler(store, "", nil)
+	h := handler.NewHandler(store, "", nil, nil)
 	r := chi.NewRouter()
 	r.Post("/value", h.GetMetricJSON)
 	srv := httptest.NewServer(r)

@@ -3,6 +3,7 @@ package handler
 
 import (
 	"bytes"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 
 	"github.com/GagarinRu/metrics/internal/audit"
+	"github.com/GagarinRu/metrics/internal/crypto"
 	"github.com/GagarinRu/metrics/internal/logger"
 	"github.com/GagarinRu/metrics/internal/models"
 	"github.com/GagarinRu/metrics/internal/storage"
@@ -29,13 +31,14 @@ const (
 )
 
 type Handler struct {
-	storage storage.Storage
-	key     string
-	auditor *audit.Publisher
+	storage    storage.Storage
+	key        string
+	privateKey *rsa.PrivateKey
+	auditor    *audit.Publisher
 }
 
-func NewHandler(storage storage.Storage, key string, auditor *audit.Publisher) *Handler {
-	return &Handler{storage: storage, key: key, auditor: auditor}
+func NewHandler(storage storage.Storage, key string, privateKey *rsa.PrivateKey, auditor *audit.Publisher) *Handler {
+	return &Handler{storage: storage, key: key, privateKey: privateKey, auditor: auditor}
 }
 
 func (h *Handler) notifyAudit(r *http.Request, metrics ...string) {
@@ -43,6 +46,40 @@ func (h *Handler) notifyAudit(r *http.Request, metrics ...string) {
 		return
 	}
 	h.auditor.Notify(metrics, audit.ClientIP(r))
+}
+
+func (h *Handler) DecryptMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.privateKey == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		path := r.URL.Path
+		if path != "/update" && path != "/updates" && path != "/value" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Method != http.MethodPost {
+			next.ServeHTTP(w, r)
+			return
+		}
+		bodyBytes, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, `{"error": "invalid request body"}`, http.StatusBadRequest)
+			return
+		}
+		if len(bodyBytes) == 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
+		decrypted, err := crypto.Decrypt(bodyBytes, h.privateKey)
+		if err != nil {
+			http.Error(w, `{"error": "invalid encrypted body"}`, http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewBuffer(decrypted))
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (h *Handler) HashMiddleware(next http.Handler) http.Handler {
