@@ -37,7 +37,7 @@ func prepareBatch(metricCount int) []models.Metrics {
 }
 
 func newTestServer(store *storage.MemStorage, key string) *httptest.Server {
-	h := handler.NewHandler(store, key, nil)
+	h := handler.NewHandler(store, key, nil, nil)
 	r := chi.NewRouter()
 	r.Get("/", h.GetAllMetrics)
 	r.Post("/updates", h.UpdateMetricsBatch)

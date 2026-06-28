@@ -14,7 +14,7 @@ import (
 func TestHandlerGetMetricCounterHTTP(t *testing.T) {
 	store := storage.NewMemStorage()
 	store.UpdateCounter("hits", 9)
-	h := NewHandler(store, "", nil)
+	h := NewHandler(store, "", nil, nil)
 	r := chi.NewRouter()
 	r.Get("/value/{metricType}/{metricName}", h.GetMetric)
 	srv := httptest.NewServer(r)
@@ -28,7 +28,7 @@ func TestHandlerGetMetricCounterHTTP(t *testing.T) {
 
 func TestHandlerUpdateMetricsCounterHTTP(t *testing.T) {
 	store := storage.NewMemStorage()
-	h := NewHandler(store, "", nil)
+	h := NewHandler(store, "", nil, nil)
 	r := chi.NewRouter()
 	r.Post("/update/{metricType}/{metricName}/{metricValue}", h.UpdateMetrics)
 	srv := httptest.NewServer(r)
@@ -46,7 +46,7 @@ func TestHandlerUpdateMetricsCounterHTTP(t *testing.T) {
 
 func TestHandlerUpdateMetricsJSONInvalidType(t *testing.T) {
 	store := storage.NewMemStorage()
-	h := NewHandler(store, "", nil)
+	h := NewHandler(store, "", nil, nil)
 	r := chi.NewRouter()
 	r.Post("/update", h.UpdateMetricsJSON)
 	srv := httptest.NewServer(r)
@@ -60,7 +60,7 @@ func TestHandlerUpdateMetricsJSONInvalidType(t *testing.T) {
 
 func TestHandlerUpdateMetricsJSONMissingID(t *testing.T) {
 	store := storage.NewMemStorage()
-	h := NewHandler(store, "", nil)
+	h := NewHandler(store, "", nil, nil)
 	r := chi.NewRouter()
 	r.Post("/update", h.UpdateMetricsJSON)
 	srv := httptest.NewServer(r)
@@ -74,7 +74,7 @@ func TestHandlerUpdateMetricsJSONMissingID(t *testing.T) {
 
 func TestHandlerUpdateMetricsJSONMissingGaugeValue(t *testing.T) {
 	store := storage.NewMemStorage()
-	h := NewHandler(store, "", nil)
+	h := NewHandler(store, "", nil, nil)
 	r := chi.NewRouter()
 	r.Post("/update", h.UpdateMetricsJSON)
 	srv := httptest.NewServer(r)
@@ -88,7 +88,7 @@ func TestHandlerUpdateMetricsJSONMissingGaugeValue(t *testing.T) {
 
 func TestHandlerUpdateMetricsJSONMissingCounterDelta(t *testing.T) {
 	store := storage.NewMemStorage()
-	h := NewHandler(store, "", nil)
+	h := NewHandler(store, "", nil, nil)
 	r := chi.NewRouter()
 	r.Post("/update", h.UpdateMetricsJSON)
 	srv := httptest.NewServer(r)

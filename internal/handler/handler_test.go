@@ -18,7 +18,7 @@ import (
 
 func newTestRouter(key string) (*storage.MemStorage, *httptest.Server) {
 	store := storage.NewMemStorage()
-	h := NewHandler(store, key, nil)
+	h := NewHandler(store, key, nil, nil)
 	r := chi.NewRouter()
 	r.Get("/", h.GetAllMetrics)
 	r.Get("/value/{metricType}/{metricName}", h.GetMetric)
@@ -142,7 +142,7 @@ func TestHandler_HashVerification(t *testing.T) {
 	defer srv.Close()
 
 	payload := []byte(`{"id":"test","type":"gauge","value":1}`)
-	h := NewHandler(storage.NewMemStorage(), "secret", nil)
+	h := NewHandler(storage.NewMemStorage(), "secret", nil, nil)
 	hash := h.calculateHash(payload)
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/update", bytes.NewReader(payload))

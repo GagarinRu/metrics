@@ -2,16 +2,19 @@ package main
 
 import (
 	"context"
+	"crypto/rsa"
 	"flag"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/GagarinRu/metrics/internal/audit"
+	"github.com/GagarinRu/metrics/internal/config"
+	"github.com/GagarinRu/metrics/internal/crypto"
 	"github.com/GagarinRu/metrics/internal/handler"
 	"github.com/GagarinRu/metrics/internal/logger"
 	"github.com/GagarinRu/metrics/internal/storage"
@@ -21,41 +24,36 @@ import (
 	"go.uber.org/zap"
 )
 
-func getEnvString(envName string, defaultValue string) string {
-	if envVal, ok := os.LookupEnv(envName); ok {
-		return strings.Trim(envVal, `"'`)
+func shutdownSignals() []os.Signal {
+	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if runtime.GOOS != "windows" {
+		sigs = append(sigs, syscall.SIGQUIT)
 	}
-	return defaultValue
-}
-
-func getEnvBool(envName string) bool {
-	if envVal := os.Getenv(envName); envVal != "" {
-		if v, err := strconv.ParseBool(envVal); err == nil {
-			return v
-		}
-	}
-	return false
-}
-
-func getEnvInt(envName string, defaultValue int) int {
-	if envVal, ok := os.LookupEnv(envName); ok {
-		envVal = strings.Trim(envVal, `"'`)
-		v, err := strconv.Atoi(envVal)
-		if err == nil {
-			return v
-		}
-		logger.Log.Warn("invalid integer in environment variable, using default",
-			zap.String("env", envName),
-			zap.String("value", envVal),
-			zap.Error(err),
-			zap.Int("default", defaultValue),
-		)
-	}
-	return defaultValue
+	return sigs
 }
 
 func main() {
 	printBuildInfo()
+
+	opts := config.ServerOptions{
+		Address:         ":8080",
+		LogLevel:        "info",
+		StoreInterval:   300,
+		FileStoragePath: "metrics.json",
+		Restore:         false,
+	}
+
+	if configPath := config.ConfigPath(); configPath != "" {
+		file, err := config.ReadServerJSON(configPath)
+		if err != nil {
+			panic("failed to load config: " + err.Error())
+		}
+		opts, err = config.ApplyServerJSON(opts, file)
+		if err != nil {
+			panic("failed to apply config: " + err.Error())
+		}
+	}
+
 	var (
 		addr            string
 		logLevel        string
@@ -64,51 +62,92 @@ func main() {
 		restore         bool
 		databaseDSN     string
 		key             string
+		cryptoKey       string
 		auditFile       string
 		auditURL        string
 	)
-	flag.StringVar(&addr, "a", ":8080", "Server address")
-	flag.StringVar(&logLevel, "l", "info", "Log level")
-	flag.IntVar(&storeInterval, "i", 300, "Interval storage in seconds")
-	flag.StringVar(&fileStoragePath, "f", "metrics.json", "Path to file for storage metrics")
-	flag.BoolVar(&restore, "r", false, "Restore metrics from a file at startup")
-	flag.StringVar(&databaseDSN, "d", "", "Database DSN")
-	flag.StringVar(&key, "k", "", "Key for hash calculation")
-	flag.StringVar(&auditFile, "audit-file", "", "Path to audit log file")
-	flag.StringVar(&auditURL, "audit-url", "", "URL for audit log delivery")
+	flag.StringVar(&addr, "a", opts.Address, "Server address")
+	flag.StringVar(&logLevel, "l", opts.LogLevel, "Log level")
+	flag.IntVar(&storeInterval, "i", opts.StoreInterval, "Interval storage in seconds")
+	flag.StringVar(&fileStoragePath, "f", opts.FileStoragePath, "Path to file for storage metrics")
+	flag.BoolVar(&restore, "r", opts.Restore, "Restore metrics from a file at startup")
+	flag.StringVar(&databaseDSN, "d", opts.DatabaseDSN, "Database DSN")
+	flag.StringVar(&key, "k", opts.Key, "Key for hash calculation")
+	flag.StringVar(&cryptoKey, "crypto-key", opts.CryptoKeyPath, "Path to private key for decryption")
+	flag.StringVar(&auditFile, "audit-file", opts.AuditFile, "Path to audit log file")
+	flag.StringVar(&auditURL, "audit-url", opts.AuditURL, "URL for audit log delivery")
+	flag.StringVar(new(string), "c", "", "Path to JSON config file")
+	flag.StringVar(new(string), "config", "", "Path to JSON config file")
 	flag.Parse()
-	databaseDSN = getEnvString("DATABASE_DSN", databaseDSN)
-	addr = getEnvString("ADDRESS", addr)
-	logLevel = getEnvString("LOG_LEVEL", logLevel)
-	storeInterval = getEnvInt("STORE_INTERVAL", storeInterval)
-	fileStoragePath = getEnvString("FILE_STORAGE_PATH", fileStoragePath)
-	restore = getEnvBool("RESTORE")
-	key = getEnvString("KEY", key)
-	auditFile = getEnvString("AUDIT_FILE", auditFile)
-	auditURL = getEnvString("AUDIT_URL", auditURL)
 
-	if err := logger.Initialize(logLevel); err != nil {
+	visited := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) {
+		visited[f.Name] = true
+	})
+	if visited["a"] {
+		opts.Address = addr
+	}
+	if visited["l"] {
+		opts.LogLevel = logLevel
+	}
+	if visited["i"] {
+		opts.StoreInterval = storeInterval
+	}
+	if visited["f"] {
+		opts.FileStoragePath = fileStoragePath
+	}
+	if visited["r"] {
+		opts.Restore = restore
+	}
+	if visited["d"] {
+		opts.DatabaseDSN = databaseDSN
+	}
+	if visited["k"] {
+		opts.Key = key
+	}
+	if visited["crypto-key"] {
+		opts.CryptoKeyPath = cryptoKey
+	}
+	if visited["audit-file"] {
+		opts.AuditFile = auditFile
+	}
+	if visited["audit-url"] {
+		opts.AuditURL = auditURL
+	}
+
+	opts = config.ApplyServerEnv(opts)
+
+	if err := logger.Initialize(opts.LogLevel); err != nil {
 		logger.Log.Fatal("Failed to initialize logger", zap.Error(err))
 	}
 	defer func() { _ = logger.Log.Sync() }()
 	logger.Log.Info("Starting server",
-		zap.String("address", addr),
-		zap.String("file_storage_path", fileStoragePath),
-		zap.Int("store_interval", storeInterval),
-		zap.Bool("restore", restore),
-		zap.String("database_dsn", databaseDSN),
+		zap.String("address", opts.Address),
+		zap.String("file_storage_path", opts.FileStoragePath),
+		zap.Int("store_interval", opts.StoreInterval),
+		zap.Bool("restore", opts.Restore),
+		zap.String("database_dsn", opts.DatabaseDSN),
 	)
 
-	auditor := audit.NewPublisher(auditFile, auditURL)
+	auditor := audit.NewPublisher(opts.AuditFile, opts.AuditURL)
 	defer func() { _ = auditor.Close() }()
-	store := storage.NewMemStorageWithFile(fileStoragePath, storeInterval, restore, databaseDSN)
+	store := storage.NewMemStorageWithFile(opts.FileStoragePath, opts.StoreInterval, opts.Restore, opts.DatabaseDSN)
 	defer func() {
 		store.Stop()
 		_ = store.Close()
 	}()
-	h := handler.NewHandler(store, key, auditor)
+	var privateKey *rsa.PrivateKey
+	if opts.CryptoKeyPath != "" {
+		var err error
+		privateKey, err = crypto.LoadPrivateKey(opts.CryptoKeyPath)
+		if err != nil {
+			logger.Log.Fatal("Failed to load private key", zap.String("path", opts.CryptoKeyPath), zap.Error(err))
+		}
+	}
+	h := handler.NewHandler(store, opts.Key, privateKey, auditor)
 	r := chi.NewRouter()
 	r.Use(middleware.StripSlashes)
+	r.Use(h.DecryptMiddleware)
 	r.Use(h.HashMiddleware)
 	r.Mount("/debug", middleware.Profiler())
 	r.Get("/", h.GetAllMetrics)
@@ -119,21 +158,25 @@ func main() {
 	r.Post("/value", h.GetMetricJSON)
 	r.Get("/ping", h.PingDataBase)
 	loggedRouter := logger.RequestLogger(gzipMiddleware(r))
-	server := &http.Server{Addr: addr, Handler: loggedRouter}
+	server := &http.Server{Addr: opts.Address, Handler: loggedRouter}
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Log.Fatal("Server failed", zap.Error(err))
 		}
 	}()
-	logger.Log.Info("Server started", zap.String("address", addr))
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	<-sigChan
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	logger.Log.Info("Server started", zap.String("address", opts.Address))
+
+	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)
+	defer stop()
+	<-ctx.Done()
+	logger.Log.Info("Received shutdown signal")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Log.Fatal("Server shutdown failed", zap.Error(err))
 	}
+	logger.Log.Info("Server stopped gracefully")
 }
 
 func gzipMiddleware(next http.Handler) http.Handler {

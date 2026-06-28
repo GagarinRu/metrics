@@ -15,7 +15,7 @@ import (
 
 func TestGzipMiddlewareInvalidBody(t *testing.T) {
 	store := storage.NewMemStorage()
-	h := handler.NewHandler(store, "", nil)
+	h := handler.NewHandler(store, "", nil, nil)
 	r := chi.NewRouter()
 	r.Post("/update", h.UpdateMetricsJSON)
 

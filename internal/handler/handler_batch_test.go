@@ -14,7 +14,7 @@ import (
 
 func TestHandler_UpdateMetricsBatchEmpty(t *testing.T) {
 	store := storage.NewMemStorage()
-	h := handler.NewHandler(store, "", nil)
+	h := handler.NewHandler(store, "", nil, nil)
 	r := chi.NewRouter()
 	r.Post("/updates", h.UpdateMetricsBatch)
 	srv := httptest.NewServer(r)
@@ -28,7 +28,7 @@ func TestHandler_UpdateMetricsBatchEmpty(t *testing.T) {
 
 func TestHandler_GetMetricNotFound(t *testing.T) {
 	store := storage.NewMemStorage()
-	h := handler.NewHandler(store, "", nil)
+	h := handler.NewHandler(store, "", nil, nil)
 	r := chi.NewRouter()
 	r.Get("/value/{metricType}/{metricName}", h.GetMetric)
 	srv := httptest.NewServer(r)

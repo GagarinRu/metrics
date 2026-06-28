@@ -1,38 +1,32 @@
 package main
 
 import (
-	"os"
 	"testing"
 
+	"github.com/GagarinRu/metrics/internal/config"
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetEnvString(t *testing.T) {
-	t.Setenv("ADDRESS", "localhost:9090")
-	require.Equal(t, "localhost:9090", getEnvString("ADDRESS", ":8080"))
-	require.Equal(t, ":8080", getEnvString("UNKNOWN", ":8080"))
-}
+func TestServerConfigPriority(t *testing.T) {
+	opts := config.ServerOptions{
+		Address:         ":8080",
+		StoreInterval:   300,
+		FileStoragePath: "metrics.json",
+	}
+	file := config.ServerJSON{
+		Address:     "localhost:9090",
+		StoreFile:   "/from/json",
+		CryptoKey:   "json-key",
+	}
+	merged, err := config.ApplyServerJSON(opts, file)
+	require.NoError(t, err)
+	require.Equal(t, "localhost:9090", merged.Address)
 
-func TestGetEnvBool(t *testing.T) {
-	t.Setenv("RESTORE", "true")
-	require.True(t, getEnvBool("RESTORE"))
-	require.False(t, getEnvBool("UNKNOWN"))
-}
-
-func TestGetEnvInt(t *testing.T) {
-	t.Setenv("STORE_INTERVAL", "120")
-	require.Equal(t, 120, getEnvInt("STORE_INTERVAL", 300))
-
-	t.Setenv("STORE_INTERVAL", "bad")
-	require.Equal(t, 300, getEnvInt("STORE_INTERVAL", 300))
-}
-
-func TestGetEnvStringTrimsQuotes(t *testing.T) {
-	t.Setenv("KEY", `"secret"`)
-	require.Equal(t, "secret", getEnvString("KEY", ""))
-}
-
-func TestGetEnvStringFromOS(t *testing.T) {
-	require.NoError(t, os.Setenv("FILE_STORAGE_PATH", "/tmp/metrics.json"))
-	require.Equal(t, "/tmp/metrics.json", getEnvString("FILE_STORAGE_PATH", "metrics.json"))
+	merged.Address = "localhost:7070"
+	merged.Key = "flag-key"
+	t.Setenv("ADDRESS", "localhost:8081")
+	t.Setenv("KEY", "env-key")
+	merged = config.ApplyServerEnv(merged)
+	require.Equal(t, "localhost:8081", merged.Address)
+	require.Equal(t, "env-key", merged.Key)
 }

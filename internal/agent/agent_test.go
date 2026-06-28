@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/GagarinRu/metrics/internal/crypto"
 	"github.com/GagarinRu/metrics/internal/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -136,4 +138,41 @@ func TestAgent_Run(t *testing.T) {
 	err := agent.Run(ctx)
 	assert.Error(t, err)
 	assert.Equal(t, context.Canceled, err)
+}
+
+func TestAgent_SendBatchEncrypted(t *testing.T) {
+	dir := t.TempDir()
+	publicPath, privatePath := crypto.WriteTestKeyPair(t, dir)
+	pub, err := crypto.LoadPublicKey(publicPath)
+	require.NoError(t, err)
+	priv, err := crypto.LoadPrivateKey(privatePath)
+	require.NoError(t, err)
+
+	received := make(map[string]models.Metrics)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, readErr := io.ReadAll(r.Body)
+		require.NoError(t, readErr)
+		decrypted, decErr := crypto.Decrypt(body, priv)
+		require.NoError(t, decErr)
+		var req []models.Metrics
+		require.NoError(t, json.Unmarshal(decrypted, &req))
+		for _, m := range req {
+			received[m.ID] = m
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	agent := NewAgent(Config{
+		ServerAddr: server.URL,
+		UseGzip:    true,
+		PublicKey:  pub,
+	})
+	gv := 77.7
+	err = agent.sendBatch([]models.Metrics{{ID: "encrypted", MType: "gauge", Value: &gv}})
+	require.NoError(t, err)
+	m, ok := received["encrypted"]
+	require.True(t, ok)
+	require.NotNil(t, m.Value)
+	require.Equal(t, 77.7, *m.Value)
 }

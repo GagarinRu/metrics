@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GagarinRu/metrics/internal/crypto"
 	"github.com/GagarinRu/metrics/internal/logger"
 	"github.com/GagarinRu/metrics/internal/metrics"
 	"github.com/GagarinRu/metrics/internal/models"
@@ -78,6 +80,7 @@ type Agent struct {
 	client         *http.Client
 	useGzip        bool
 	key            string
+	publicKey      *rsa.PublicKey
 	rateLimit      int
 	reportSignal   chan struct{}
 	reportSem      chan struct{}
@@ -92,6 +95,7 @@ type Config struct {
 	ServerAddr     string
 	UseGzip        bool
 	Key            string
+	PublicKey      *rsa.PublicKey
 	RateLimit      int
 }
 
@@ -114,6 +118,7 @@ func NewAgent(cfg Config) *Agent {
 		},
 		useGzip:      cfg.UseGzip,
 		key:          cfg.Key,
+		publicKey:    cfg.PublicKey,
 		rateLimit:    rateLimit,
 		reportSignal: make(chan struct{}, reportSignalBuf),
 		reportSem:    make(chan struct{}, rateLimit),
@@ -247,8 +252,17 @@ func (a *Agent) sendBatch(metrics []models.Metrics) error {
 		logger.Log.Error("Failed to marshal batch", zap.Error(err))
 		return err
 	}
-	bodyReader := bytes.NewReader(jsonData)
-	if a.useGzip {
+	payload := jsonData
+	if a.publicKey != nil {
+		encrypted, err := crypto.Encrypt(jsonData, a.publicKey)
+		if err != nil {
+			logger.Log.Error("Failed to encrypt batch", zap.Error(err))
+			return err
+		}
+		payload = encrypted
+	}
+	bodyReader := bytes.NewReader(payload)
+	if a.useGzip && a.publicKey == nil {
 		var buf bytes.Buffer
 		zw := gzip.NewWriter(&buf)
 		if _, err := zw.Write(jsonData); err != nil {
@@ -273,7 +287,7 @@ func (a *Agent) sendBatch(metrics []models.Metrics) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept-Encoding", "gzip")
-	if a.useGzip {
+	if a.useGzip && a.publicKey == nil {
 		req.Header.Set("Content-Encoding", "gzip")
 	}
 	if a.key != "" {
