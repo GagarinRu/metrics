@@ -10,6 +10,15 @@
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
+coverage
+coverage_internal
+
+# Local config and runtime data
+.env
+metrics.json
+
+# Profiling artifacts
+profiles/*.pprof
 
 # Binaries
 cmd/agent/main

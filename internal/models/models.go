@@ -1,5 +1,9 @@
+// Package models defines metric data structures.
 package models
 
+//go:generate go run ../../cmd/reset
+
+// generate:reset
 type Metrics struct {
 	ID    string   `json:"id"`
 	MType string   `json:"type"`

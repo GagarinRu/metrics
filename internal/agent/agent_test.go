@@ -10,6 +10,7 @@ import (
 
 	"github.com/GagarinRu/metrics/internal/models"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAgent_SendBatch_GaugeAndCounter(t *testing.T) {
@@ -61,7 +62,7 @@ func TestAgent_SendBatch(t *testing.T) {
 			receivedMetrics[m.ID] = m
 		}
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}))
 	defer server.Close()
 	agent := NewAgent(Config{
@@ -73,6 +74,47 @@ func TestAgent_SendBatch(t *testing.T) {
 	err := agent.sendBatch(agent.collectAllMetrics())
 	assert.NoError(t, err)
 	assert.True(t, len(receivedMetrics) > 0)
+}
+
+func TestAgent_SendBatchGzip(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "gzip", r.Header.Get("Content-Encoding"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	agent := NewAgent(Config{
+		ServerAddr: server.URL,
+		UseGzip:    true,
+	})
+	gv := 1.0
+	err := agent.sendBatch([]models.Metrics{{ID: "g", MType: "gauge", Value: &gv}})
+	assert.NoError(t, err)
+}
+
+func TestAgent_Shutdown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	agent := NewAgent(Config{
+		ServerAddr:     server.URL,
+		PollInterval:   50 * time.Millisecond,
+		ReportInterval: 50 * time.Millisecond,
+		UseGzip:        false,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		_ = agent.Run(ctx)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
+	defer shutdownCancel()
+	assert.NoError(t, agent.Shutdown(shutdownCtx))
 }
 
 func TestAgent_Run(t *testing.T) {

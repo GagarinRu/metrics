@@ -1,3 +1,4 @@
+// Package metrics collects and stores agent runtime metrics.
 package metrics
 
 import (

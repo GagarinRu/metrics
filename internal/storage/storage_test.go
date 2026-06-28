@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GagarinRu/metrics/internal/models"
 	"github.com/stretchr/testify/assert"
@@ -98,4 +99,25 @@ func TestMemStorage_PingWithoutDB(t *testing.T) {
 func TestMemStorage_LoadMissingFile(t *testing.T) {
 	store := NewMemStorageWithFile(filepath.Join(t.TempDir(), "missing.json"), 0, false, "")
 	assert.NoError(t, store.Load())
+}
+
+func TestMemStorage_StopAndClose(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metrics.json")
+	store := NewMemStorageWithFile(path, 1, false, "")
+	store.UpdateGauge("Alloc", 1)
+	store.Stop()
+	assert.NoError(t, store.Close())
+}
+
+func TestMemStorage_AutoSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "metrics.json")
+	store := NewMemStorageWithFile(path, 1, false, "")
+	store.UpdateCounter("PollCount", 1)
+	time.Sleep(1100 * time.Millisecond)
+	store.Stop()
+
+	restored := NewMemStorageWithFile(path, 0, true, "")
+	cnt, ok := restored.GetCounter("PollCount")
+	assert.True(t, ok)
+	assert.Equal(t, int64(1), cnt)
 }

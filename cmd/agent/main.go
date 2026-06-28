@@ -43,6 +43,7 @@ func getEnvString(envName string, defaultValue string) string {
 }
 
 func main() {
+	printBuildInfo()
 	var (
 		pollInterval   int
 		logLevel       string
@@ -67,10 +68,10 @@ func main() {
 	if err := logger.Initialize(logLevel); err != nil {
 		panic("Failed to initialize logger: " + err.Error())
 	}
-	defer logger.Log.Sync()
+	defer func() { _ = logger.Log.Sync() }()
 	if flag.NArg() > 0 {
 		logger.Log.Error("Unknown arguments", zap.Strings("args", flag.Args()))
-		os.Exit(1)
+		exit(1)
 	}
 	cfg := agent.Config{
 		PollInterval:   time.Duration(pollInterval) * time.Second,
@@ -89,7 +90,7 @@ func main() {
 	go func() {
 		if err := a.Run(context.Background()); err != nil && err != context.Canceled {
 			logger.Log.Error("Agent error", zap.Error(err))
-			os.Exit(1)
+			exit(1)
 		}
 	}()
 	sigChan := make(chan os.Signal, 1)

@@ -1,3 +1,4 @@
+// Package agent implements the metrics reporting client.
 package agent
 
 import (
@@ -36,7 +37,7 @@ func isRetryableError(err error) bool {
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		return netErr.Temporary() || netErr.Timeout()
+		return netErr.Timeout()
 	}
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
@@ -286,7 +287,7 @@ func (a *Agent) sendBatch(metrics []models.Metrics) error {
 			zap.Error(err))
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var respBody io.Reader = resp.Body
 	if resp.Header.Get("Content-Encoding") == "gzip" {
 		zr, err := gzip.NewReader(resp.Body)
@@ -294,7 +295,7 @@ func (a *Agent) sendBatch(metrics []models.Metrics) error {
 			logger.Log.Error("Failed to create gzip reader", zap.Error(err))
 			return fmt.Errorf("failed to create gzip reader: %w", err)
 		}
-		defer zr.Close()
+		defer func() { _ = zr.Close() }()
 		respBody = zr
 	}
 	if resp.StatusCode != http.StatusOK {
